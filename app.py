@@ -56,6 +56,8 @@ class StreamSession:
         self.frame_lock = threading.Lock()
 
         self.latest_caption = ""
+        self.latest_latency_ms = 0.0
+        self.inference_count = 0
         self.caption_lock = threading.Lock()
 
         self.caption_subscribers: list[queue.Queue] = []
@@ -94,17 +96,25 @@ class StreamSession:
                 continue
 
             try:
-                caption = captioner.caption_frame(frame)
+                caption, latency_ms = captioner.caption_frame(frame)
             except Exception:
                 logger.exception("Captioning failed on stream %d", self.stream_id)
                 caption = "[captioning error]"
+                latency_ms = 0.0
 
             with self.caption_lock:
                 self.latest_caption = caption
+                self.latest_latency_ms = latency_ms
+                self.inference_count += 1
+                count = self.inference_count
 
-            event_data = json.dumps(
-                {"stream_id": self.stream_id, "caption": caption, "ts": time.time()}
-            )
+            event_data = json.dumps({
+                "stream_id": self.stream_id,
+                "caption": caption,
+                "ts": time.time(),
+                "latency_ms": round(latency_ms, 1),
+                "inference_count": count,
+            })
             with self.subscribers_lock:
                 for q in self.caption_subscribers:
                     try:
@@ -164,6 +174,8 @@ def list_streams():
                 "source": s.source_label,
                 "captioning": s.captioning_active,
                 "interval": s.caption_interval,
+                "latency_ms": round(s.latest_latency_ms, 1),
+                "inference_count": s.inference_count,
             }
             for s in streams.values()
         ]

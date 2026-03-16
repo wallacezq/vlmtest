@@ -53,11 +53,14 @@ class VideoCaptioner:
         )
         logger.info("Model ready on %s.", device)
 
-    def caption_frame(self, frame_bgr: np.ndarray) -> str:
+    def caption_frame(self, frame_bgr: np.ndarray) -> tuple[str, float]:
         """Generate a caption for a single BGR (OpenCV) frame.
 
+        Returns (caption_text, latency_ms).
         Thread-safe: concurrent calls are serialized via a lock.
         """
+        t0 = time.perf_counter()
+
         # Convert BGR -> RGB -> PIL
         rgb = frame_bgr[:, :, ::-1]
         pil_image = Image.fromarray(rgb)
@@ -97,4 +100,6 @@ class VideoCaptioner:
         captions = self.processor.batch_decode(
             trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
         )
-        return captions[0].strip()
+
+        latency_ms = (time.perf_counter() - t0) * 1000
+        return captions[0].strip(), latency_ms

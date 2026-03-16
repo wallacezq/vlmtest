@@ -91,6 +91,10 @@
                         '<input id="interval-' + s.stream_id + '" type="number" min="0.5" step="0.5" ' +
                                'value="' + s.interval + '" onchange="setStreamInterval(' + s.stream_id + ')">' +
                     '</label>' +
+                '</div>' +
+                '<div class="stats-bar">' +
+                    '<span class="stat">Latency: <strong id="latency-' + s.stream_id + '">—</strong> ms</span>' +
+                    '<span class="stat">Inferences: <strong id="infcount-' + s.stream_id + '">0</strong></span>' +
                 '</div>';
             grid.appendChild(card);
 
@@ -175,11 +179,18 @@
                 // Update overlay
                 const overlay = document.getElementById('captionText-' + msg.stream_id);
                 if (overlay) overlay.textContent = msg.caption;
+                // Update stats
+                const latEl = document.getElementById('latency-' + msg.stream_id);
+                if (latEl) latEl.textContent = msg.latency_ms;
+                const cntEl = document.getElementById('infcount-' + msg.stream_id);
+                if (cntEl) cntEl.textContent = msg.inference_count;
                 // Append to shared log
                 const li = document.createElement('li');
                 const ts = new Date(msg.ts * 1000).toLocaleTimeString();
                 li.innerHTML = '<span class="log-stream">#' + msg.stream_id + '</span> ' +
-                               '<time>' + ts + '</time> ' + escapeHtml(msg.caption);
+                               '<time>' + ts + '</time> ' +
+                               '<span class="log-latency">' + msg.latency_ms + 'ms</span> ' +
+                               escapeHtml(msg.caption);
                 const log = document.getElementById('captionLog');
                 log.prepend(li);
                 while (log.children.length > 100) log.removeChild(log.lastChild);
