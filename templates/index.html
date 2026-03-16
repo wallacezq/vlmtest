@@ -3,96 +3,189 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live Video Captioning — OpenVINO + Qwen3.5-VL</title>
+    <title>Live Video Captioning — OpenVINO + Qwen3-VL</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <header>
         <h1>Live Video Captioning</h1>
-        <span class="badge">OpenVINO GPU &bull; Qwen3.5-VL-2B</span>
+        <span class="badge">OpenVINO GPU &bull; Qwen3-VL-2B</span>
+        <span class="badge badge-slots" id="slotBadge">0 / {{ max_streams }} streams</span>
     </header>
 
     <main>
-        <!-- Video + caption overlay -->
-        <div class="video-container">
-            <img id="videoFeed" src="/video_feed" alt="Video stream">
-            <div id="captionOverlay" class="caption-overlay">
-                <span id="captionText">Waiting for caption&hellip;</span>
-            </div>
+        <!-- Add-stream bar -->
+        <div class="add-stream-bar">
+            <input id="sourceInput" type="text" placeholder="Video source (0, /path/video.mp4, rtsp://…)"
+                   value="0">
+            <button class="btn btn-add" onclick="addStream()">+ Add Stream</button>
         </div>
 
-        <!-- Controls -->
-        <div class="controls">
-            <button id="btnStart" class="btn btn-start" onclick="startCaptioning()">
-                &#9654; Start Captioning
-            </button>
-            <button id="btnStop" class="btn btn-stop" onclick="stopCaptioning()" disabled>
-                &#9632; Stop Captioning
-            </button>
-            <label class="interval-label">
-                Interval (s):
-                <input id="intervalInput" type="number" min="0.5" step="0.5" value="2.0"
-                       onchange="setInterval_()">
-            </label>
-        </div>
+        <!-- Stream grid (populated dynamically) -->
+        <div id="streamGrid" class="stream-grid"></div>
 
-        <!-- Caption log -->
+        <!-- Shared caption log -->
         <section class="log-section">
-            <h2>Caption Log</h2>
+            <h2>Caption Log (all streams)</h2>
             <ul id="captionLog"></ul>
         </section>
     </main>
 
     <script>
-        let evtSource = null;
+        const MAX_STREAMS = {{ max_streams }};
+        const activeSessions = {};   // stream_id -> { evtSource }
 
-        function startCaptioning() {
-            fetch('/caption/start', { method: 'POST' })
-                .then(r => r.json())
-                .then(data => {
-                    document.getElementById('btnStart').disabled = true;
-                    document.getElementById('btnStop').disabled = false;
-                    connectSSE();
+        // ---- Refresh stream list on load ----
+        document.addEventListener('DOMContentLoaded', refreshStreams);
+
+        function refreshStreams() {
+            fetch('/streams').then(r => r.json()).then(streams => {
+                document.getElementById('slotBadge').textContent =
+                    streams.length + ' / ' + MAX_STREAMS + ' streams';
+                const grid = document.getElementById('streamGrid');
+                // Remove cards for streams that no longer exist
+                const knownIds = new Set(streams.map(s => s.stream_id));
+                grid.querySelectorAll('.stream-card').forEach(card => {
+                    const sid = parseInt(card.dataset.sid);
+                    if (!knownIds.has(sid)) {
+                        if (activeSessions[sid]) {
+                            activeSessions[sid].evtSource?.close();
+                            delete activeSessions[sid];
+                        }
+                        card.remove();
+                    }
+                });
+                // Add cards for new streams
+                streams.forEach(s => {
+                    if (!document.getElementById('card-' + s.stream_id)) {
+                        createCard(s);
+                    }
+                });
+            });
+        }
+
+        function createCard(s) {
+            const grid = document.getElementById('streamGrid');
+            const card = document.createElement('div');
+            card.className = 'stream-card';
+            card.id = 'card-' + s.stream_id;
+            card.dataset.sid = s.stream_id;
+            card.innerHTML =
+                '<div class="card-header">' +
+                    '<span class="card-title">Stream #' + s.stream_id + '</span>' +
+                    '<span class="card-source">' + escapeHtml(s.source) + '</span>' +
+                    '<button class="btn btn-remove" onclick="removeStream(' + s.stream_id + ')">&times;</button>' +
+                '</div>' +
+                '<div class="video-container">' +
+                    '<img src="/video_feed/' + s.stream_id + '" alt="Stream ' + s.stream_id + '">' +
+                    '<div class="caption-overlay">' +
+                        '<span id="captionText-' + s.stream_id + '">Waiting for caption&hellip;</span>' +
+                    '</div>' +
+                '</div>' +
+                '<div class="controls">' +
+                    '<button id="btnStart-' + s.stream_id + '" class="btn btn-start" ' +
+                        'onclick="startCaptioning(' + s.stream_id + ')">&#9654; Start</button>' +
+                    '<button id="btnStop-' + s.stream_id + '" class="btn btn-stop" ' +
+                        'onclick="stopCaptioning(' + s.stream_id + ')" disabled>&#9632; Stop</button>' +
+                    '<label class="interval-label">Interval:' +
+                        '<input id="interval-' + s.stream_id + '" type="number" min="0.5" step="0.5" ' +
+                               'value="' + s.interval + '" onchange="setStreamInterval(' + s.stream_id + ')">' +
+                    '</label>' +
+                '</div>';
+            grid.appendChild(card);
+
+            // If captioning was already active (page refresh), auto-connect
+            if (s.captioning) {
+                document.getElementById('btnStart-' + s.stream_id).disabled = true;
+                document.getElementById('btnStop-' + s.stream_id).disabled = false;
+                connectSSE(s.stream_id);
+            }
+        }
+
+        // ---- Stream CRUD ----
+        function addStream() {
+            const source = document.getElementById('sourceInput').value.trim();
+            if (!source) return;
+            fetch('/streams', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ source: source })
+            })
+            .then(r => {
+                if (!r.ok) return r.json().then(d => { alert(d.error); throw 0; });
+                return r.json();
+            })
+            .then(() => refreshStreams())
+            .catch(() => {});
+        }
+
+        function removeStream(sid) {
+            fetch('/streams/' + sid, { method: 'DELETE' })
+                .then(() => {
+                    if (activeSessions[sid]) {
+                        activeSessions[sid].evtSource?.close();
+                        delete activeSessions[sid];
+                    }
+                    const card = document.getElementById('card-' + sid);
+                    if (card) card.remove();
+                    refreshStreams();
                 });
         }
 
-        function stopCaptioning() {
-            fetch('/caption/stop', { method: 'POST' })
+        // ---- Captioning controls ----
+        function startCaptioning(sid) {
+            fetch('/caption/start/' + sid, { method: 'POST' })
                 .then(r => r.json())
-                .then(data => {
-                    document.getElementById('btnStart').disabled = false;
-                    document.getElementById('btnStop').disabled = true;
-                    if (evtSource) { evtSource.close(); evtSource = null; }
+                .then(() => {
+                    document.getElementById('btnStart-' + sid).disabled = true;
+                    document.getElementById('btnStop-' + sid).disabled = false;
+                    connectSSE(sid);
                 });
         }
 
-        function setInterval_() {
-            const val = parseFloat(document.getElementById('intervalInput').value);
-            fetch('/caption/interval', {
+        function stopCaptioning(sid) {
+            fetch('/caption/stop/' + sid, { method: 'POST' })
+                .then(r => r.json())
+                .then(() => {
+                    document.getElementById('btnStart-' + sid).disabled = false;
+                    document.getElementById('btnStop-' + sid).disabled = true;
+                    if (activeSessions[sid]) {
+                        activeSessions[sid].evtSource?.close();
+                        delete activeSessions[sid];
+                    }
+                });
+        }
+
+        function setStreamInterval(sid) {
+            const val = parseFloat(document.getElementById('interval-' + sid).value);
+            fetch('/caption/interval/' + sid, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ interval: val })
             });
         }
 
-        function connectSSE() {
-            if (evtSource) evtSource.close();
-            evtSource = new EventSource('/caption_stream');
-            evtSource.onmessage = function(e) {
+        // ---- SSE ----
+        function connectSSE(sid) {
+            if (activeSessions[sid]?.evtSource) activeSessions[sid].evtSource.close();
+            const es = new EventSource('/caption_stream/' + sid);
+            activeSessions[sid] = { evtSource: es };
+            es.onmessage = function(e) {
                 const msg = JSON.parse(e.data);
                 // Update overlay
-                document.getElementById('captionText').textContent = msg.caption;
-                // Append to log
+                const overlay = document.getElementById('captionText-' + msg.stream_id);
+                if (overlay) overlay.textContent = msg.caption;
+                // Append to shared log
                 const li = document.createElement('li');
                 const ts = new Date(msg.ts * 1000).toLocaleTimeString();
-                li.innerHTML = '<time>' + ts + '</time> ' + escapeHtml(msg.caption);
+                li.innerHTML = '<span class="log-stream">#' + msg.stream_id + '</span> ' +
+                               '<time>' + ts + '</time> ' + escapeHtml(msg.caption);
                 const log = document.getElementById('captionLog');
                 log.prepend(li);
-                // Keep log trimmed to 50 entries
-                while (log.children.length > 50) log.removeChild(log.lastChild);
+                while (log.children.length > 100) log.removeChild(log.lastChild);
             };
-            evtSource.onerror = function() {
-                console.warn('SSE connection error, will auto-reconnect');
+            es.onerror = function() {
+                console.warn('SSE error on stream ' + sid + ', will auto-reconnect');
             };
         }
 

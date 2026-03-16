@@ -1,5 +1,5 @@
 """
-Video captioning engine using Qwen3.5-VL-2B-Instruct with OpenVINO GPU acceleration.
+Video captioning engine using Qwen3-VL-2B-Instruct with OpenVINO GPU acceleration.
 """
 
 import threading
@@ -13,20 +13,27 @@ from optimum.intel.openvino import OVModelForVisualCausalLM
 from transformers import AutoProcessor
 from qwen_vl_utils import process_vision_info
 
+from config import MODEL_ID, OV_DEVICE, MAX_CONCURRENT_CAPTIONS
+
 logger = logging.getLogger(__name__)
 
 
 class VideoCaptioner:
-    """Loads Qwen3.5-VL-2B-Instruct on OpenVINO GPU and captions video frames."""
+    """Loads Qwen3-VL-2B-Instruct on OpenVINO GPU and captions video frames.
+
+    Uses a semaphore to allow up to MAX_CONCURRENT_CAPTIONS parallel
+    inferences on the same GPU-compiled model.
+    """
 
     def __init__(
         self,
-        model_path: str = "Qwen/Qwen3.5-VL-2B-Instruct",
-        device: str = "GPU",
+        model_path: str = MODEL_ID,
+        device: str = OV_DEVICE,
         max_new_tokens: int = 64,
+        max_concurrent: int = MAX_CONCURRENT_CAPTIONS,
     ):
         self.max_new_tokens = max_new_tokens
-        self._lock = threading.Lock()
+        self._semaphore = threading.Semaphore(max_concurrent)
 
         logger.info("Loading processor from %s ...", model_path)
         self.processor = AutoProcessor.from_pretrained(model_path)
@@ -48,7 +55,7 @@ class VideoCaptioner:
     def caption_frame(self, frame_bgr: np.ndarray) -> str:
         """Generate a caption for a single BGR (OpenCV) frame.
 
-        Thread-safe: only one inference runs at a time.
+        Thread-safe: up to max_concurrent inferences run in parallel.
         """
         # Convert BGR -> RGB -> PIL
         rgb = frame_bgr[:, :, ::-1]
@@ -79,7 +86,7 @@ class VideoCaptioner:
             return_tensors="pt",
         )
 
-        with self._lock:
+        with self._semaphore:
             generated_ids = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens)
 
         # Trim the prompt tokens from the output

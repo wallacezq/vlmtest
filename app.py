@@ -1,10 +1,13 @@
 """
-Flask application for live video captioning with OpenVINO-accelerated Qwen3.5-VL.
+Flask application for live video captioning with OpenVINO-accelerated Qwen3-VL.
+
+Supports up to MAX_CONCURRENT_CAPTIONS simultaneous video streams, each
+captioned independently on the same GPU via a shared model.
 
 Usage:
-    python app.py                          # webcam (device 0)
-    python app.py --source /path/video.mp4 # video file
-    python app.py --source rtsp://...      # RTSP / HTTP stream
+    python app.py                          # start server (add streams via UI)
+    python app.py --source 0               # auto-start with webcam stream
+    python app.py --source /path/video.mp4 # auto-start with a video file
     python app.py --model ./ov_model       # pre-exported OpenVINO model directory
     python app.py --device GPU.1           # specific GPU device
 """
@@ -19,6 +22,7 @@ import time
 import cv2
 from flask import Flask, Response, render_template, request, jsonify
 
+from config import MODEL_ID, OV_DEVICE, MAX_CONCURRENT_CAPTIONS
 from captioner import VideoCaptioner
 
 # ---------------------------------------------------------------------------
@@ -26,22 +30,7 @@ from captioner import VideoCaptioner
 # ---------------------------------------------------------------------------
 app = Flask(__name__)
 
-captioner: VideoCaptioner = None          # initialized in main()
-cap: cv2.VideoCapture = None              # video capture handle
-
-latest_frame = None                       # most recent BGR frame
-frame_lock = threading.Lock()
-
-latest_caption = ""                       # most recent caption text
-caption_lock = threading.Lock()
-
-caption_subscribers: list[queue.Queue] = []  # SSE subscriber queues
-subscribers_lock = threading.Lock()
-
-captioning_active = False                 # control flag
-captioning_thread: threading.Thread = None
-
-CAPTION_INTERVAL = 2.0                    # seconds between caption inferences
+captioner: VideoCaptioner = None          # shared model, initialized in main()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,53 +40,109 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Background workers
+# Stream session management
 # ---------------------------------------------------------------------------
-def _frame_reader():
-    """Continuously read frames from the video source."""
-    global latest_frame, cap
-    while cap is not None and cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            # Loop video files; for live streams this just retries
-            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            time.sleep(0.05)
-            continue
-        with frame_lock:
-            latest_frame = frame
-        time.sleep(1 / 30)  # ~30 fps pacing
+class StreamSession:
+    """Encapsulates one captioned video stream."""
+
+    def __init__(self, stream_id: int, source):
+        self.stream_id = stream_id
+        self.source_label = str(source)
+        self.cap = cv2.VideoCapture(source)
+        if not self.cap.isOpened():
+            raise RuntimeError(f"Cannot open video source: {source}")
+
+        self.latest_frame = None
+        self.frame_lock = threading.Lock()
+
+        self.latest_caption = ""
+        self.caption_lock = threading.Lock()
+
+        self.caption_subscribers: list[queue.Queue] = []
+        self.subscribers_lock = threading.Lock()
+
+        self.captioning_active = False
+        self.caption_interval = 2.0
+
+        # Start background frame reader
+        self._reader_thread = threading.Thread(
+            target=self._frame_reader, daemon=True
+        )
+        self._reader_thread.start()
+
+    # --- background workers ---
+
+    def _frame_reader(self):
+        while self.cap is not None and self.cap.isOpened():
+            ret, frame = self.cap.read()
+            if not ret:
+                self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                time.sleep(0.05)
+                continue
+            with self.frame_lock:
+                self.latest_frame = frame
+            time.sleep(1 / 30)
+
+    def _captioning_loop(self):
+        while self.captioning_active:
+            with self.frame_lock:
+                frame = (
+                    self.latest_frame.copy() if self.latest_frame is not None else None
+                )
+            if frame is None:
+                time.sleep(0.2)
+                continue
+
+            try:
+                caption = captioner.caption_frame(frame)
+            except Exception:
+                logger.exception("Captioning failed on stream %d", self.stream_id)
+                caption = "[captioning error]"
+
+            with self.caption_lock:
+                self.latest_caption = caption
+
+            event_data = json.dumps(
+                {"stream_id": self.stream_id, "caption": caption, "ts": time.time()}
+            )
+            with self.subscribers_lock:
+                for q in self.caption_subscribers:
+                    try:
+                        q.put_nowait(event_data)
+                    except queue.Full:
+                        pass
+
+            time.sleep(self.caption_interval)
+
+    # --- public controls ---
+
+    def start_captioning(self):
+        if self.captioning_active:
+            return
+        self.captioning_active = True
+        threading.Thread(target=self._captioning_loop, daemon=True).start()
+
+    def stop_captioning(self):
+        self.captioning_active = False
+
+    def release(self):
+        self.captioning_active = False
+        if self.cap is not None:
+            self.cap.release()
+            self.cap = None
 
 
-def _captioning_loop():
-    """Periodically caption the latest frame and push to subscribers."""
-    global latest_caption, captioning_active
-    while captioning_active:
-        with frame_lock:
-            frame = latest_frame.copy() if latest_frame is not None else None
+# Stream registry  (stream_id -> StreamSession)
+streams: dict[int, StreamSession] = {}
+streams_lock = threading.Lock()
+_next_stream_id = 0
 
-        if frame is None:
-            time.sleep(0.2)
-            continue
 
-        try:
-            caption = captioner.caption_frame(frame)
-        except Exception:
-            logger.exception("Captioning failed")
-            caption = "[captioning error]"
-
-        with caption_lock:
-            latest_caption = caption
-
-        # Push to all SSE subscribers
-        event_data = json.dumps({"caption": caption, "ts": time.time()})
-        with subscribers_lock:
-            for q in caption_subscribers:
-                try:
-                    q.put_nowait(event_data)
-                except queue.Full:
-                    pass  # subscriber is slow, skip
-
-        time.sleep(CAPTION_INTERVAL)
+def _allocate_stream_id() -> int:
+    global _next_stream_id
+    sid = _next_stream_id
+    _next_stream_id += 1
+    return sid
 
 
 # ---------------------------------------------------------------------------
@@ -105,87 +150,154 @@ def _captioning_loop():
 # ---------------------------------------------------------------------------
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", max_streams=MAX_CONCURRENT_CAPTIONS)
 
 
-def _generate_mjpeg():
-    """Yield MJPEG frames for the /video_feed endpoint."""
-    while True:
-        with frame_lock:
-            frame = latest_frame.copy() if latest_frame is not None else None
-        if frame is None:
-            time.sleep(0.05)
-            continue
-        ret, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-        if not ret:
-            continue
-        yield (
-            b"--frame\r\n"
-            b"Content-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
-        )
-        time.sleep(1 / 30)
+# ---- Stream CRUD ----
+
+@app.route("/streams", methods=["GET"])
+def list_streams():
+    with streams_lock:
+        info = [
+            {
+                "stream_id": s.stream_id,
+                "source": s.source_label,
+                "captioning": s.captioning_active,
+                "interval": s.caption_interval,
+            }
+            for s in streams.values()
+        ]
+    return jsonify(info)
 
 
-@app.route("/video_feed")
-def video_feed():
+@app.route("/streams", methods=["POST"])
+def add_stream():
+    data = request.get_json(silent=True) or {}
+    source_raw = data.get("source", "0")
+    source = int(source_raw) if str(source_raw).isdigit() else source_raw
+
+    with streams_lock:
+        if len(streams) >= MAX_CONCURRENT_CAPTIONS:
+            return jsonify({"error": f"Maximum {MAX_CONCURRENT_CAPTIONS} streams reached"}), 400
+        sid = _allocate_stream_id()
+        try:
+            session = StreamSession(sid, source)
+        except RuntimeError as exc:
+            return jsonify({"error": str(exc)}), 400
+        streams[sid] = session
+
+    logger.info("Added stream %d from source %s", sid, source)
+    return jsonify({"stream_id": sid, "source": session.source_label}), 201
+
+
+@app.route("/streams/<int:sid>", methods=["DELETE"])
+def remove_stream(sid: int):
+    with streams_lock:
+        session = streams.pop(sid, None)
+    if session is None:
+        return jsonify({"error": "stream not found"}), 404
+    session.release()
+    logger.info("Removed stream %d", sid)
+    return jsonify({"status": "removed", "stream_id": sid})
+
+
+# ---- Per-stream video feed ----
+
+@app.route("/video_feed/<int:sid>")
+def video_feed(sid: int):
+    with streams_lock:
+        session = streams.get(sid)
+    if session is None:
+        return "stream not found", 404
+
+    def generate(sess):
+        while True:
+            with sess.frame_lock:
+                frame = (
+                    sess.latest_frame.copy() if sess.latest_frame is not None else None
+                )
+            if frame is None:
+                time.sleep(0.05)
+                continue
+            ret, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            if not ret:
+                continue
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n"
+            )
+            time.sleep(1 / 30)
+
     return Response(
-        _generate_mjpeg(),
+        generate(session),
         mimetype="multipart/x-mixed-replace; boundary=frame",
     )
 
 
-@app.route("/caption_stream")
-def caption_stream():
-    """Server-Sent Events endpoint that pushes new captions."""
+# ---- Per-stream caption SSE ----
 
-    def event_stream():
+@app.route("/caption_stream/<int:sid>")
+def caption_stream(sid: int):
+    with streams_lock:
+        session = streams.get(sid)
+    if session is None:
+        return "stream not found", 404
+
+    def event_stream(sess):
         q = queue.Queue(maxsize=20)
-        with subscribers_lock:
-            caption_subscribers.append(q)
+        with sess.subscribers_lock:
+            sess.caption_subscribers.append(q)
         try:
             while True:
                 try:
                     data = q.get(timeout=30)
                     yield f"data: {data}\n\n"
                 except queue.Empty:
-                    yield ": keepalive\n\n"  # prevent connection timeout
+                    yield ": keepalive\n\n"
         finally:
-            with subscribers_lock:
-                caption_subscribers.remove(q)
+            with sess.subscribers_lock:
+                sess.caption_subscribers.remove(q)
 
-    return Response(event_stream(), mimetype="text/event-stream")
-
-
-@app.route("/caption/start", methods=["POST"])
-def start_captioning():
-    global captioning_active, captioning_thread
-    if captioning_active:
-        return jsonify({"status": "already running"})
-    captioning_active = True
-    captioning_thread = threading.Thread(target=_captioning_loop, daemon=True)
-    captioning_thread.start()
-    return jsonify({"status": "started"})
+    return Response(event_stream(session), mimetype="text/event-stream")
 
 
-@app.route("/caption/stop", methods=["POST"])
-def stop_captioning():
-    global captioning_active
-    captioning_active = False
-    return jsonify({"status": "stopped"})
+# ---- Per-stream captioning controls ----
+
+@app.route("/caption/start/<int:sid>", methods=["POST"])
+def start_captioning(sid: int):
+    with streams_lock:
+        session = streams.get(sid)
+    if session is None:
+        return jsonify({"error": "stream not found"}), 404
+    session.start_captioning()
+    return jsonify({"status": "started", "stream_id": sid})
 
 
-@app.route("/caption/interval", methods=["POST"])
-def set_interval():
-    global CAPTION_INTERVAL
+@app.route("/caption/stop/<int:sid>", methods=["POST"])
+def stop_captioning(sid: int):
+    with streams_lock:
+        session = streams.get(sid)
+    if session is None:
+        return jsonify({"error": "stream not found"}), 404
+    session.stop_captioning()
+    return jsonify({"status": "stopped", "stream_id": sid})
+
+
+@app.route("/caption/interval/<int:sid>", methods=["POST"])
+def set_interval(sid: int):
+    with streams_lock:
+        session = streams.get(sid)
+    if session is None:
+        return jsonify({"error": "stream not found"}), 404
     data = request.get_json(silent=True) or {}
     try:
-        val = float(data.get("interval", CAPTION_INTERVAL))
+        val = float(data.get("interval", session.caption_interval))
         if val < 0.5:
             val = 0.5
-        CAPTION_INTERVAL = val
+        session.caption_interval = val
     except (TypeError, ValueError):
         return jsonify({"error": "invalid interval"}), 400
-    return jsonify({"interval": CAPTION_INTERVAL})
+    return jsonify({"interval": session.caption_interval, "stream_id": sid})
 
 
 # ---------------------------------------------------------------------------
@@ -195,17 +307,17 @@ def parse_args():
     p = argparse.ArgumentParser(description="Live Video Captioning with OpenVINO")
     p.add_argument(
         "--source",
-        default="0",
-        help="Video source: webcam index (e.g. 0), file path, or stream URL",
+        default=None,
+        help="Video source to auto-add on startup (webcam index, file, or URL)",
     )
     p.add_argument(
         "--model",
-        default="Qwen/Qwen3.5-VL-2B-Instruct",
+        default=MODEL_ID,
         help="HuggingFace model ID or local path to pre-exported OpenVINO model",
     )
     p.add_argument(
         "--device",
-        default="GPU",
+        default=OV_DEVICE,
         help="OpenVINO device (GPU, GPU.0, CPU, ...)",
     )
     p.add_argument("--host", default="127.0.0.1")
@@ -214,25 +326,22 @@ def parse_args():
 
 
 def main():
-    global captioner, cap
+    global captioner
 
     args = parse_args()
 
-    # --- Open video source ----
-    source = int(args.source) if args.source.isdigit() else args.source
-    logger.info("Opening video source: %s", source)
-    cap = cv2.VideoCapture(source)
-    if not cap.isOpened():
-        raise RuntimeError(f"Cannot open video source: {source}")
-
-    # Start frame reader
-    threading.Thread(target=_frame_reader, daemon=True).start()
-
-    # --- Load model ---
+    # --- Load shared model ---
     captioner = VideoCaptioner(
         model_path=args.model,
         device=args.device,
     )
+
+    # --- Optionally auto-add a stream from CLI ---
+    if args.source is not None:
+        source = int(args.source) if args.source.isdigit() else args.source
+        logger.info("Auto-adding stream from source: %s", source)
+        sid = _allocate_stream_id()
+        streams[sid] = StreamSession(sid, source)
 
     # --- Start Flask ---
     logger.info("Starting Flask on http://%s:%d", args.host, args.port)

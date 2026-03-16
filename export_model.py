@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Pre-export Qwen3.5-VL-2B-Instruct to OpenVINO IR format (INT4 weight compression).
+Pre-export Qwen3-VL-2B-Instruct to OpenVINO IR format (INT4 weight compression).
 
 Run this once before starting the app if you want faster cold-start times:
     python export_model.py                       # defaults
@@ -16,20 +16,22 @@ import logging
 from optimum.intel.openvino import OVModelForVisualCausalLM
 from transformers import AutoProcessor
 
+from config import MODEL_ID, OV_MODEL_DIR
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 logger = logging.getLogger(__name__)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Export Qwen3.5-VL to OpenVINO IR")
+    parser = argparse.ArgumentParser(description="Export Qwen3-VL to OpenVINO IR")
     parser.add_argument(
         "--model",
-        default="Qwen/Qwen3.5-VL-2B-Instruct",
+        default=MODEL_ID,
         help="HuggingFace model ID",
     )
     parser.add_argument(
         "--output",
-        default="./ov_qwen3_5_vl_2b",
+        default=OV_MODEL_DIR,
         help="Directory to save the exported model",
     )
     args = parser.parse_args()
