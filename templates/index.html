@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Video Captioning — OpenVINO + Qwen2-VL</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header>
+        <h1>Live Video Captioning</h1>
+        <span class="badge">OpenVINO GPU &bull; Qwen2-VL-2B</span>
+    </header>
+
+    <main>
+        <!-- Video + caption overlay -->
+        <div class="video-container">
+            <img id="videoFeed" src="/video_feed" alt="Video stream">
+            <div id="captionOverlay" class="caption-overlay">
+                <span id="captionText">Waiting for caption&hellip;</span>
+            </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="controls">
+            <button id="btnStart" class="btn btn-start" onclick="startCaptioning()">
+                &#9654; Start Captioning
+            </button>
+            <button id="btnStop" class="btn btn-stop" onclick="stopCaptioning()" disabled>
+                &#9632; Stop Captioning
+            </button>
+            <label class="interval-label">
+                Interval (s):
+                <input id="intervalInput" type="number" min="0.5" step="0.5" value="2.0"
+                       onchange="setInterval_()">
+            </label>
+        </div>
+
+        <!-- Caption log -->
+        <section class="log-section">
+            <h2>Caption Log</h2>
+            <ul id="captionLog"></ul>
+        </section>
+    </main>
+
+    <script>
+        let evtSource = null;
+
+        function startCaptioning() {
+            fetch('/caption/start', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('btnStart').disabled = true;
+                    document.getElementById('btnStop').disabled = false;
+                    connectSSE();
+                });
+        }
+
+        function stopCaptioning() {
+            fetch('/caption/stop', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('btnStart').disabled = false;
+                    document.getElementById('btnStop').disabled = true;
+                    if (evtSource) { evtSource.close(); evtSource = null; }
+                });
+        }
+
+        function setInterval_() {
+            const val = parseFloat(document.getElementById('intervalInput').value);
+            fetch('/caption/interval', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ interval: val })
+            });
+        }
+
+        function connectSSE() {
+            if (evtSource) evtSource.close();
+            evtSource = new EventSource('/caption_stream');
+            evtSource.onmessage = function(e) {
+                const msg = JSON.parse(e.data);
+                // Update overlay
+                document.getElementById('captionText').textContent = msg.caption;
+                // Append to log
+                const li = document.createElement('li');
+                const ts = new Date(msg.ts * 1000).toLocaleTimeString();
+                li.innerHTML = '<time>' + ts + '</time> ' + escapeHtml(msg.caption);
+                const log = document.getElementById('captionLog');
+                log.prepend(li);
+                // Keep log trimmed to 50 entries
+                while (log.children.length > 50) log.removeChild(log.lastChild);
+            };
+            evtSource.onerror = function() {
+                console.warn('SSE connection error, will auto-reconnect');
+            };
+        }
+
+        function escapeHtml(text) {
+            const d = document.createElement('div');
+            d.textContent = text;
+            return d.innerHTML;
+        }
+    </script>
+</body>
+</html>
