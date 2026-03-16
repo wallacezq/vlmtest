@@ -5,17 +5,41 @@ Video captioning engine using Qwen3-VL-2B-Instruct with OpenVINO GPU acceleratio
 import threading
 import time
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 from optimum.intel.openvino import OVModelForVisualCausalLM
-from transformers import AutoProcessor
+from transformers import AutoProcessor, BaseStreamer
 from qwen_vl_utils import process_vision_info
 
 from config import MODEL_ID, OV_DEVICE
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class InferenceStats:
+    """Timing breakdown for a single VLM inference."""
+    latency_ms: float = 0.0
+    prefill_ms: float = 0.0
+    decode_ms: float = 0.0
+    decode_tps: float = 0.0
+    generated_tokens: int = 0
+
+
+class _TokenTimingStreamer(BaseStreamer):
+    """Records a timestamp each time the model produces a token."""
+
+    def __init__(self):
+        self.token_timestamps: list[float] = []
+
+    def put(self, value):
+        self.token_timestamps.append(time.perf_counter())
+
+    def end(self):
+        pass
 
 
 class VideoCaptioner:
@@ -53,10 +77,10 @@ class VideoCaptioner:
         )
         logger.info("Model ready on %s.", device)
 
-    def caption_frame(self, frame_bgr: np.ndarray) -> tuple[str, float]:
+    def caption_frame(self, frame_bgr: np.ndarray) -> tuple[str, InferenceStats]:
         """Generate a caption for a single BGR (OpenCV) frame.
 
-        Returns (caption_text, latency_ms).
+        Returns (caption_text, InferenceStats).
         Thread-safe: concurrent calls are serialized via a lock.
         """
         t0 = time.perf_counter()
@@ -91,7 +115,12 @@ class VideoCaptioner:
         )
 
         with self._lock:
-            generated_ids = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens)
+            streamer = _TokenTimingStreamer()
+            t_gen_start = time.perf_counter()
+            generated_ids = self.model.generate(
+                **inputs, max_new_tokens=self.max_new_tokens, streamer=streamer
+            )
+            t_gen_end = time.perf_counter()
 
         # Trim the prompt tokens from the output
         trimmed = [
@@ -102,4 +131,17 @@ class VideoCaptioner:
         )
 
         latency_ms = (time.perf_counter() - t0) * 1000
-        return captions[0].strip(), latency_ms
+
+        # Compute prefill / decode breakdown
+        stats = InferenceStats(latency_ms=latency_ms)
+        ts = streamer.token_timestamps
+        if ts:
+            stats.generated_tokens = len(ts)
+            stats.prefill_ms = (ts[0] - t_gen_start) * 1000
+            if len(ts) > 1:
+                stats.decode_ms = (ts[-1] - ts[0]) * 1000
+                decode_tokens = len(ts) - 1
+                decode_s = ts[-1] - ts[0]
+                stats.decode_tps = decode_tokens / decode_s if decode_s > 0 else 0.0
+
+        return captions[0].strip(), stats

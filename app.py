@@ -23,7 +23,7 @@ import cv2
 from flask import Flask, Response, render_template, request, jsonify
 
 from config import MODEL_ID, OV_DEVICE, MAX_CONCURRENT_CAPTIONS
-from captioner import VideoCaptioner
+from captioner import VideoCaptioner, InferenceStats
 
 # ---------------------------------------------------------------------------
 # Globals
@@ -57,6 +57,10 @@ class StreamSession:
 
         self.latest_caption = ""
         self.latest_latency_ms = 0.0
+        self.latest_prefill_ms = 0.0
+        self.latest_decode_ms = 0.0
+        self.latest_decode_tps = 0.0
+        self.latest_generated_tokens = 0
         self.inference_count = 0
         self.caption_lock = threading.Lock()
 
@@ -96,15 +100,19 @@ class StreamSession:
                 continue
 
             try:
-                caption, latency_ms = captioner.caption_frame(frame)
+                caption, stats = captioner.caption_frame(frame)
             except Exception:
                 logger.exception("Captioning failed on stream %d", self.stream_id)
                 caption = "[captioning error]"
-                latency_ms = 0.0
+                stats = InferenceStats()
 
             with self.caption_lock:
                 self.latest_caption = caption
-                self.latest_latency_ms = latency_ms
+                self.latest_latency_ms = stats.latency_ms
+                self.latest_prefill_ms = stats.prefill_ms
+                self.latest_decode_ms = stats.decode_ms
+                self.latest_decode_tps = stats.decode_tps
+                self.latest_generated_tokens = stats.generated_tokens
                 self.inference_count += 1
                 count = self.inference_count
 
@@ -112,7 +120,11 @@ class StreamSession:
                 "stream_id": self.stream_id,
                 "caption": caption,
                 "ts": time.time(),
-                "latency_ms": round(latency_ms, 1),
+                "latency_ms": round(stats.latency_ms, 1),
+                "prefill_ms": round(stats.prefill_ms, 1),
+                "decode_ms": round(stats.decode_ms, 1),
+                "decode_tps": round(stats.decode_tps, 1),
+                "generated_tokens": stats.generated_tokens,
                 "inference_count": count,
             })
             with self.subscribers_lock:
@@ -175,6 +187,10 @@ def list_streams():
                 "captioning": s.captioning_active,
                 "interval": s.caption_interval,
                 "latency_ms": round(s.latest_latency_ms, 1),
+                "prefill_ms": round(s.latest_prefill_ms, 1),
+                "decode_ms": round(s.latest_decode_ms, 1),
+                "decode_tps": round(s.latest_decode_tps, 1),
+                "generated_tokens": s.latest_generated_tokens,
                 "inference_count": s.inference_count,
             }
             for s in streams.values()

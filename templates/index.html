@@ -94,6 +94,10 @@
                 '</div>' +
                 '<div class="stats-bar">' +
                     '<span class="stat">Latency: <strong id="latency-' + s.stream_id + '">—</strong> ms</span>' +
+                    '<span class="stat">Prefill: <strong id="prefill-' + s.stream_id + '">—</strong> ms</span>' +
+                    '<span class="stat">Decode: <strong id="decode-' + s.stream_id + '">—</strong> ms</span>' +
+                    '<span class="stat">Decode: <strong id="tps-' + s.stream_id + '">—</strong> tok/s</span>' +
+                    '<span class="stat">Tokens: <strong id="tokens-' + s.stream_id + '">—</strong></span>' +
                     '<span class="stat">Inferences: <strong id="infcount-' + s.stream_id + '">0</strong></span>' +
                 '</div>';
             grid.appendChild(card);
@@ -180,16 +184,26 @@
                 const overlay = document.getElementById('captionText-' + msg.stream_id);
                 if (overlay) overlay.textContent = msg.caption;
                 // Update stats
-                const latEl = document.getElementById('latency-' + msg.stream_id);
-                if (latEl) latEl.textContent = msg.latency_ms;
-                const cntEl = document.getElementById('infcount-' + msg.stream_id);
-                if (cntEl) cntEl.textContent = msg.inference_count;
+                const updates = {
+                    ['latency-' + msg.stream_id]: msg.latency_ms,
+                    ['prefill-' + msg.stream_id]: msg.prefill_ms,
+                    ['decode-' + msg.stream_id]: msg.decode_ms,
+                    ['tps-' + msg.stream_id]: msg.decode_tps,
+                    ['tokens-' + msg.stream_id]: msg.generated_tokens,
+                    ['infcount-' + msg.stream_id]: msg.inference_count,
+                };
+                for (const [id, val] of Object.entries(updates)) {
+                    const el = document.getElementById(id);
+                    if (el) el.textContent = val;
+                }
                 // Append to shared log
                 const li = document.createElement('li');
                 const ts = new Date(msg.ts * 1000).toLocaleTimeString();
                 li.innerHTML = '<span class="log-stream">#' + msg.stream_id + '</span> ' +
                                '<time>' + ts + '</time> ' +
                                '<span class="log-latency">' + msg.latency_ms + 'ms</span> ' +
+                               '<span class="log-prefill">P:' + msg.prefill_ms + 'ms</span> ' +
+                               '<span class="log-decode">D:' + msg.decode_ms + 'ms ' + msg.decode_tps + 't/s</span> ' +
                                escapeHtml(msg.caption);
                 const log = document.getElementById('captionLog');
                 log.prepend(li);
