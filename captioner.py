@@ -13,7 +13,7 @@ from optimum.intel.openvino import OVModelForVisualCausalLM
 from transformers import AutoProcessor
 from qwen_vl_utils import process_vision_info
 
-from config import MODEL_ID, OV_DEVICE, MAX_CONCURRENT_CAPTIONS
+from config import MODEL_ID, OV_DEVICE
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 class VideoCaptioner:
     """Loads Qwen3-VL-2B-Instruct on OpenVINO GPU and captions video frames.
 
-    Uses a semaphore to allow up to MAX_CONCURRENT_CAPTIONS parallel
-    inferences on the same GPU-compiled model.
+    Uses a Lock to serialize GPU inference so concurrent streams take turns
+    without triggering 'Infer Request is busy' errors.
     """
 
     def __init__(
@@ -30,16 +30,17 @@ class VideoCaptioner:
         model_path: str = MODEL_ID,
         device: str = OV_DEVICE,
         max_new_tokens: int = 64,
-        max_concurrent: int = MAX_CONCURRENT_CAPTIONS,
     ):
         self.max_new_tokens = max_new_tokens
-        self._semaphore = threading.Semaphore(max_concurrent)
+        self._lock = threading.Lock()
 
         logger.info("Loading processor from %s ...", model_path)
         self.processor = AutoProcessor.from_pretrained(model_path)
 
         model_dir = Path(model_path)
-        export_needed = not (model_dir.is_dir() and (model_dir / "openvino_model.xml").exists())
+        export_needed = not (
+            model_dir.is_dir() and any(model_dir.glob("openvino_*.xml"))
+        )
 
         logger.info(
             "Loading model on OpenVINO device=%s (export=%s) ...", device, export_needed
@@ -55,7 +56,7 @@ class VideoCaptioner:
     def caption_frame(self, frame_bgr: np.ndarray) -> str:
         """Generate a caption for a single BGR (OpenCV) frame.
 
-        Thread-safe: up to max_concurrent inferences run in parallel.
+        Thread-safe: concurrent calls are serialized via a lock.
         """
         # Convert BGR -> RGB -> PIL
         rgb = frame_bgr[:, :, ::-1]
@@ -86,7 +87,7 @@ class VideoCaptioner:
             return_tensors="pt",
         )
 
-        with self._semaphore:
+        with self._lock:
             generated_ids = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens)
 
         # Trim the prompt tokens from the output
