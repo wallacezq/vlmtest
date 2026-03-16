@@ -1,5 +1,5 @@
 """
-Flask application for live video captioning with OpenVINO-accelerated Qwen2-VL.
+Flask application for live video captioning with OpenVINO-accelerated Qwen3.5-VL.
 
 Usage:
     python app.py                          # webcam (device 0)
@@ -200,7 +200,7 @@ def parse_args():
     )
     p.add_argument(
         "--model",
-        default="Qwen/Qwen2-VL-2B-Instruct",
+        default="Qwen/Qwen3.5-VL-2B-Instruct",
         help="HuggingFace model ID or local path to pre-exported OpenVINO model",
     )
     p.add_argument(

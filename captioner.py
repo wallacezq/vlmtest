@@ -1,5 +1,5 @@
 """
-Video captioning engine using Qwen2-VL-2B-Instruct with OpenVINO GPU acceleration.
+Video captioning engine using Qwen3.5-VL-2B-Instruct with OpenVINO GPU acceleration.
 """
 
 import threading
@@ -17,11 +17,11 @@ logger = logging.getLogger(__name__)
 
 
 class VideoCaptioner:
-    """Loads Qwen2-VL-2B-Instruct on OpenVINO GPU and captions video frames."""
+    """Loads Qwen3.5-VL-2B-Instruct on OpenVINO GPU and captions video frames."""
 
     def __init__(
         self,
-        model_path: str = "Qwen/Qwen2-VL-2B-Instruct",
+        model_path: str = "Qwen/Qwen3.5-VL-2B-Instruct",
         device: str = "GPU",
         max_new_tokens: int = 64,
     ):
