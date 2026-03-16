@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 from optimum.intel.openvino import OVModelForVisualCausalLM
-from transformers import AutoProcessor, BaseStreamer
+from transformers import AutoProcessor
 from qwen_vl_utils import process_vision_info
 
 from config import MODEL_ID, OV_DEVICE
@@ -29,7 +29,7 @@ class InferenceStats:
     generated_tokens: int = 0
 
 
-class _TokenTimingStreamer(BaseStreamer):
+class _TokenTimingStreamer:
     """Records a timestamp each time the model produces a token."""
 
     def __init__(self):
