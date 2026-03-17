@@ -297,19 +297,24 @@ class InternVLCaptioner(BaseCaptioner):
             model_path, export=export_needed, device=device, compile=True,
             trust_remote_code=True,
         )
-        logger.info("InternVL3 model ready on %s.", device)
+        # InternVL3 config: how many visual tokens per image tile
+        self.num_image_token = getattr(self.model.config, 'num_image_token', 256)
+        self.img_context_token = '<IMG_CONTEXT>'
+        logger.info("InternVL3 model ready on %s (num_image_token=%d).", device, self.num_image_token)
 
-    def _build_messages(self, n_images: int) -> list[dict]:
-        """Build chat messages with <image> placeholders for InternVL3."""
-        image_placeholders = "".join(f"Image-{i+1}: <image>\n" for i in range(n_images))
+    def _build_prompt(self, pil_images: list[Image.Image], tiles_per_image: list[int]) -> str:
+        """Build a text prompt with expanded IMG_CONTEXT placeholders."""
+        parts = []
+        for i, n_tiles in enumerate(tiles_per_image):
+            n_tokens = n_tiles * self.num_image_token
+            parts.append(f"Image-{i+1}: " + self.img_context_token * n_tokens + "\n")
         question = (
-            f"{image_placeholders}"
             "These video frames are in chronological order. "
             "In 10-15 words, briefly describe the main action."
         )
-        return [
-            {"role": "user", "content": [{"type": "text", "text": question}]}
-        ]
+        user_content = "".join(parts) + question
+        messages = [{"role": "user", "content": user_content}]
+        return self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
     def caption_frame(self, frame_bgr: np.ndarray) -> tuple[str, InferenceStats]:
         """Caption a single frame (wraps it as a 1-frame chunk)."""
@@ -317,20 +322,27 @@ class InternVLCaptioner(BaseCaptioner):
 
     def caption_frames(self, frames_bgr: list[np.ndarray]) -> tuple[str, InferenceStats]:
         """Caption a chunk of BGR frames."""
+        import torch
         t0 = time.perf_counter()
 
         indices = np.linspace(0, len(frames_bgr) - 1, min(self.chunk_frames, len(frames_bgr)), dtype=int)
         pil_images = [Image.fromarray(frames_bgr[i][:, :, ::-1]) for i in indices]
 
-        messages = self._build_messages(len(pil_images))
-        text_prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        # Process each image individually to know per-image tile count
+        all_pixel_values = []
+        tiles_per_image = []
+        for img in pil_images:
+            img_out = self.image_processor(images=img, return_tensors="pt")
+            pv = img_out["pixel_values"]  # (num_tiles, C, H, W)
+            all_pixel_values.append(pv)
+            tiles_per_image.append(pv.shape[0])
 
-        # Tokenize text
-        text_inputs = self.tokenizer(text_prompt, padding=True, return_tensors="pt")
-        # Process images into pixel_values
-        image_inputs = self.image_processor(images=pil_images, return_tensors="pt")
-        # Merge into a single dict for generate()
-        inputs = {**text_inputs, **image_inputs}
+        # Build prompt with correct number of IMG_CONTEXT tokens per image
+        text_prompt = self._build_prompt(pil_images, tiles_per_image)
+        text_inputs = self.tokenizer(text_prompt, return_tensors="pt")
+
+        pixel_values = torch.cat(all_pixel_values, dim=0)
+        inputs = {**text_inputs, "pixel_values": pixel_values}
 
         with self._lock:
             streamer = _TokenTimingStreamer()
