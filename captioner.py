@@ -73,6 +73,14 @@ def _detect_export_needed(model_path: str) -> bool:
     return not (model_dir.is_dir() and any(model_dir.glob("openvino_*.xml")))
 
 
+def _resolve_model_path(model_path: str) -> str:
+    """Resolve local paths to absolute so HuggingFace doesn't mistake them for repo IDs."""
+    p = Path(model_path)
+    if p.exists():
+        return str(p.resolve())
+    return model_path
+
+
 # ---------------------------------------------------------------------------
 # Base class
 # ---------------------------------------------------------------------------
@@ -105,6 +113,8 @@ class QwenCaptioner(BaseCaptioner):
 
         self.max_new_tokens = max_new_tokens
         self._lock = threading.Lock()
+
+        model_path = _resolve_model_path(model_path)
 
         logger.info("Loading Qwen processor from %s ...", model_path)
         self.processor = AutoProcessor.from_pretrained(model_path)
@@ -172,6 +182,8 @@ class MiniCPMCaptioner(BaseCaptioner):
         self.chunk_frames = chunk_frames
         self._lock = threading.Lock()
 
+        model_path = _resolve_model_path(model_path)
+
         logger.info("Loading MiniCPM-V processor from %s ...", model_path)
         self.processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
 
@@ -183,19 +195,15 @@ class MiniCPMCaptioner(BaseCaptioner):
         )
         logger.info("MiniCPM-V model ready on %s.", device)
 
-    def _build_messages(self, pil_images: list[Image.Image]) -> list[dict]:
-        """Build a chat-style message with multiple frames."""
-        content = []
-        for img in pil_images:
-            content.append({"type": "image", "image": img})
-        content.append({
-            "type": "text",
-            "text": (
-                "These frames are sampled from a short video clip in chronological order. "
-                "Describe what is happening in the video in one or two concise sentences."
-            ),
-        })
-        return [{"role": "user", "content": content}]
+    def _build_prompt(self, pil_images: list[Image.Image]) -> str:
+        """Build a text prompt with <image> placeholders for MiniCPM-V."""
+        image_tags = "".join("<image>" for _ in pil_images)
+        question = (
+            "These frames are sampled from a short video clip in chronological order. "
+            "Describe what is happening in the video in one or two concise sentences."
+        )
+        # MiniCPM-V chat format: <用户>{images}{question}<AI>
+        return f"<用户>{image_tags}{question}<AI>"
 
     def caption_frame(self, frame_bgr: np.ndarray) -> tuple[str, InferenceStats]:
         """Caption a single frame (wraps it as a 1-frame chunk)."""
@@ -209,8 +217,7 @@ class MiniCPMCaptioner(BaseCaptioner):
         indices = np.linspace(0, len(frames_bgr) - 1, min(self.chunk_frames, len(frames_bgr)), dtype=int)
         pil_images = [Image.fromarray(frames_bgr[i][:, :, ::-1]) for i in indices]
 
-        messages = self._build_messages(pil_images)
-        text_prompt = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        text_prompt = self._build_prompt(pil_images)
         inputs = self.processor(
             text=[text_prompt], images=pil_images,
             padding=True, return_tensors="pt",
