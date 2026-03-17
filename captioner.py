@@ -188,6 +188,19 @@ class MiniCPMCaptioner(BaseCaptioner):
         logger.info("Loading MiniCPM-V processor from %s ...", model_path)
         self.processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
 
+        # If the local dir lacks custom processor code, AutoProcessor may
+        # return a plain tokenizer.  Fall back to the HuggingFace hub.
+        if not hasattr(self.processor, 'image_processor'):
+            logger.warning(
+                "Local dir lacks MiniCPM-V processor code; "
+                "loading processor from %s instead",
+                MINICPM_MODEL_ID,
+            )
+            self.processor = AutoProcessor.from_pretrained(
+                MINICPM_MODEL_ID, trust_remote_code=True,
+            )
+        self.tokenizer = self.processor.tokenizer
+
         export_needed = _detect_export_needed(model_path)
         logger.info("Loading MiniCPM-V model on %s (export=%s) ...", device, export_needed)
         self.model = OVModelForVisualCausalLM.from_pretrained(
@@ -218,10 +231,17 @@ class MiniCPMCaptioner(BaseCaptioner):
         pil_images = [Image.fromarray(frames_bgr[i][:, :, ::-1]) for i in indices]
 
         text_prompt = self._build_prompt(pil_images)
-        inputs = self.processor(
-            text=[text_prompt], images=[pil_images],
-            padding=True, return_tensors="pt",
-        )
+        try:
+            inputs = self.processor(
+                text=[text_prompt], images=[pil_images],
+                padding=True, return_tensors="pt",
+            )
+        except TypeError:
+            # Older MiniCPM-V processor uses different argument names
+            inputs = self.processor(
+                prompts=[text_prompt], img_list=[pil_images],
+                return_tensors="pt",
+            )
 
         with self._lock:
             streamer = _TokenTimingStreamer()
@@ -229,7 +249,7 @@ class MiniCPMCaptioner(BaseCaptioner):
             generated_ids = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens, streamer=streamer)
 
         trimmed = [out[len(inp):] for inp, out in zip(inputs.input_ids, generated_ids)]
-        caption = self.processor.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0].strip()
+        caption = self.tokenizer.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0].strip()
         return caption, _compute_stats(t0, t_gen_start, streamer)
 
 
@@ -258,6 +278,19 @@ class InternVLCaptioner(BaseCaptioner):
 
         logger.info("Loading InternVL3 processor from %s ...", model_path)
         self.processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
+
+        # If the local dir lacks custom processor code, AutoProcessor may
+        # return a plain tokenizer.  Fall back to the HuggingFace hub.
+        if not hasattr(self.processor, 'image_processor'):
+            logger.warning(
+                "Local dir lacks InternVL3 processor code; "
+                "loading processor from %s instead",
+                INTERNVL_MODEL_ID,
+            )
+            self.processor = AutoProcessor.from_pretrained(
+                INTERNVL_MODEL_ID, trust_remote_code=True,
+            )
+        self.tokenizer = self.processor.tokenizer
 
         export_needed = _detect_export_needed(model_path)
         logger.info("Loading InternVL3 model on %s (export=%s) ...", device, export_needed)
@@ -303,7 +336,7 @@ class InternVLCaptioner(BaseCaptioner):
             generated_ids = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens, streamer=streamer)
 
         trimmed = [out[len(inp):] for inp, out in zip(inputs.input_ids, generated_ids)]
-        caption = self.processor.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0].strip()
+        caption = self.tokenizer.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0].strip()
         return caption, _compute_stats(t0, t_gen_start, streamer)
 
 
