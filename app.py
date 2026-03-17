@@ -23,6 +23,7 @@ import threading
 import time
 
 import cv2
+import numpy as np
 from flask import Flask, Response, render_template, request, jsonify
 
 from config import (
@@ -63,11 +64,11 @@ class StreamSession:
         self.latest_frame = None
         self.frame_lock = threading.Lock()
 
-        # Ring buffer for recent frames (used by MiniCPM chunk mode)
+        # Frame accumulator for chunk mode — collects all frames between
+        # captioning cycles so we can uniformly sample over the full interval.
         self.chunk_size = MINICPM_VIDEO_CHUNK_FRAMES
-        self._frame_buffer: collections.deque = collections.deque(
-            maxlen=max(MINICPM_VIDEO_CHUNK_FRAMES * 2, 32)
-        )
+        self._frame_buffer: list = []
+        self._frame_buffer_lock = threading.Lock()
 
         # Per-stream captioning mode: "frame" (single image) or "chunk" (video)
         self.mode = "frame" if active_backend == "qwen" else "chunk"
@@ -107,18 +108,29 @@ class StreamSession:
                 continue
             with self.frame_lock:
                 self.latest_frame = frame
+            with self._frame_buffer_lock:
                 self._frame_buffer.append(frame.copy())
             time.sleep(1 / 30)
 
     def _captioning_loop(self):
         while self.captioning_active:
-            with self.frame_lock:
-                if self.mode == "chunk" and len(self._frame_buffer) > 0:
-                    frames = list(self._frame_buffer)[-self.chunk_size:]
-                elif self.latest_frame is not None:
-                    frames = [self.latest_frame.copy()]
+            if self.mode == "chunk":
+                # Drain all frames accumulated since last cycle and
+                # uniformly sample chunk_size frames across the interval.
+                with self._frame_buffer_lock:
+                    buffered = self._frame_buffer
+                    self._frame_buffer = []
+                if len(buffered) > 0 and self.chunk_size > 0:
+                    indices = np.linspace(0, len(buffered) - 1, min(self.chunk_size, len(buffered)), dtype=int)
+                    frames = [buffered[i] for i in indices]
                 else:
                     frames = []
+            else:
+                with self.frame_lock:
+                    if self.latest_frame is not None:
+                        frames = [self.latest_frame.copy()]
+                    else:
+                        frames = []
 
             if not frames:
                 time.sleep(0.2)
