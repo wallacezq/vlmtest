@@ -219,7 +219,7 @@ class MiniCPMCaptioner(BaseCaptioner):
 
         text_prompt = self._build_prompt(pil_images)
         inputs = self.processor(
-            text=[text_prompt], images=pil_images,
+            text=[text_prompt], images=[pil_images],
             padding=True, return_tensors="pt",
         )
 
