@@ -6,3 +6,5 @@ optimum[openvino]>=1.18
 transformers>=4.45
 qwen-vl-utils>=0.0.8
 openvino>=2026.0
+timm>=1.0
+sentencepiece>=0.2

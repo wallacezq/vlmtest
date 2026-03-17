@@ -164,6 +164,18 @@ main {
     color: #e0e0e0;
     font-size: 0.8rem;
 }
+.mode-label {
+    font-size: 0.8rem;
+    color: #a0a0b0;
+}
+.mode-label select {
+    padding: 0.3rem 0.4rem;
+    border: 1px solid #3a3d4a;
+    border-radius: 6px;
+    background: #1e2030;
+    color: #e0e0e0;
+    font-size: 0.8rem;
+}
 
 /* ---- Stats bar ---- */
 .stats-bar {
@@ -219,6 +231,17 @@ main {
     padding: 0.1rem 0.4rem;
     border-radius: 4px;
     margin-right: 0.3rem;
+}
+.log-mode {
+    display: inline-block;
+    background: #374151;
+    color: #d1d5db;
+    font-size: 0.7rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+    margin-right: 0.3rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
 }
 .log-latency {
     display: inline-block;

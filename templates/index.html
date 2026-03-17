@@ -9,7 +9,7 @@
 <body>
     <header>
         <h1>Live Video Captioning</h1>
-        <span class="badge">OpenVINO GPU &bull; Qwen3-VL-2B</span>
+        <span class="badge" id="backendBadge">OpenVINO GPU &bull; {{ backend }}</span>
         <span class="badge badge-slots" id="slotBadge">0 / {{ max_streams }} streams</span>
     </header>
 
@@ -34,6 +34,8 @@
     <script>
         const MAX_STREAMS = {{ max_streams }};
         const activeSessions = {};   // stream_id -> { evtSource }
+
+        const BACKEND = '{{ backend }}';
 
         // ---- Refresh stream list on load ----
         document.addEventListener('DOMContentLoaded', refreshStreams);
@@ -87,6 +89,12 @@
                         'onclick="startCaptioning(' + s.stream_id + ')">&#9654; Start</button>' +
                     '<button id="btnStop-' + s.stream_id + '" class="btn btn-stop" ' +
                         'onclick="stopCaptioning(' + s.stream_id + ')" disabled>&#9632; Stop</button>' +
+                    '<label class="mode-label">Mode:' +
+                        '<select id="mode-' + s.stream_id + '" onchange="setStreamMode(' + s.stream_id + ')">' +
+                            '<option value="frame"' + (s.mode === 'frame' ? ' selected' : '') + '>Frame</option>' +
+                            '<option value="chunk"' + (s.mode === 'chunk' ? ' selected' : '') + '>Chunk</option>' +
+                        '</select>' +
+                    '</label>' +
                     '<label class="interval-label">Interval:' +
                         '<input id="interval-' + s.stream_id + '" type="number" min="0.5" step="0.5" ' +
                                'value="' + s.interval + '" onchange="setStreamInterval(' + s.stream_id + ')">' +
@@ -173,6 +181,15 @@
             });
         }
 
+        function setStreamMode(sid) {
+            const mode = document.getElementById('mode-' + sid).value;
+            fetch('/caption/mode/' + sid, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mode: mode })
+            });
+        }
+
         // ---- SSE ----
         function connectSSE(sid) {
             if (activeSessions[sid]?.evtSource) activeSessions[sid].evtSource.close();
@@ -200,6 +217,7 @@
                 const li = document.createElement('li');
                 const ts = new Date(msg.ts * 1000).toLocaleTimeString();
                 li.innerHTML = '<span class="log-stream">#' + msg.stream_id + '</span> ' +
+                               '<span class="log-mode">' + (msg.mode || 'frame') + '</span> ' +
                                '<time>' + ts + '</time> ' +
                                '<span class="log-latency">' + msg.latency_ms + 'ms</span> ' +
                                '<span class="log-prefill">P:' + msg.prefill_ms + 'ms</span> ' +

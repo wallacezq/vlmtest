@@ -1,18 +1,21 @@
 """
-Flask application for live video captioning with OpenVINO-accelerated Qwen3-VL.
+Flask application for live video captioning with OpenVINO-accelerated VLMs.
 
-Supports up to MAX_CONCURRENT_CAPTIONS simultaneous video streams, each
-captioned independently on the same GPU via a shared model.
+Supports Qwen3-VL (single-frame) and MiniCPM-V (video-chunk) backends.
+Up to MAX_CONCURRENT_CAPTIONS simultaneous video streams, each captioned
+independently on the same GPU via a shared model.
 
 Usage:
-    python app.py                          # start server (add streams via UI)
-    python app.py --source 0               # auto-start with webcam stream
-    python app.py --source /path/video.mp4 # auto-start with a video file
-    python app.py --model ./ov_model       # pre-exported OpenVINO model directory
-    python app.py --device GPU.1           # specific GPU device
+    python app.py                              # Qwen backend (default)
+    python app.py --backend minicpm            # MiniCPM video-chunk backend
+    python app.py --source 0                   # auto-start with webcam stream
+    python app.py --source /path/video.mp4     # auto-start with a video file
+    python app.py --model ./ov_model           # pre-exported OpenVINO model dir
+    python app.py --device GPU.1               # specific GPU device
 """
 
 import argparse
+import collections
 import json
 import logging
 import queue
@@ -22,15 +25,20 @@ import time
 import cv2
 from flask import Flask, Response, render_template, request, jsonify
 
-from config import MODEL_ID, OV_DEVICE, MAX_CONCURRENT_CAPTIONS
-from captioner import VideoCaptioner, InferenceStats
+from config import (
+    MODEL_ID, MINICPM_MODEL_ID, OV_DEVICE,
+    MAX_CONCURRENT_CAPTIONS, MODEL_BACKEND,
+    MINICPM_VIDEO_CHUNK_FRAMES,
+)
+from captioner import BaseCaptioner, InferenceStats, create_captioner
 
 # ---------------------------------------------------------------------------
 # Globals
 # ---------------------------------------------------------------------------
 app = Flask(__name__)
 
-captioner: VideoCaptioner = None          # shared model, initialized in main()
+captioner: BaseCaptioner = None           # shared model, initialized in main()
+active_backend: str = MODEL_BACKEND       # "qwen" or "minicpm"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -51,6 +59,17 @@ class StreamSession:
         self.cap = cv2.VideoCapture(source)
         if not self.cap.isOpened():
             raise RuntimeError(f"Cannot open video source: {source}")
+
+        self.latest_frame = None
+        self.frame_lock = threading.Lock()
+
+        # Ring buffer for recent frames (used by MiniCPM chunk mode)
+        self._frame_buffer: collections.deque = collections.deque(
+            maxlen=MINICPM_VIDEO_CHUNK_FRAMES
+        )
+
+        # Per-stream captioning mode: "frame" (single image) or "chunk" (video)
+        self.mode = "frame" if active_backend == "qwen" else "chunk"
 
         self.latest_frame = None
         self.frame_lock = threading.Lock()
@@ -87,20 +106,28 @@ class StreamSession:
                 continue
             with self.frame_lock:
                 self.latest_frame = frame
+                self._frame_buffer.append(frame.copy())
             time.sleep(1 / 30)
 
     def _captioning_loop(self):
         while self.captioning_active:
             with self.frame_lock:
-                frame = (
-                    self.latest_frame.copy() if self.latest_frame is not None else None
-                )
-            if frame is None:
+                if self.mode == "chunk" and len(self._frame_buffer) > 0:
+                    frames = list(self._frame_buffer)
+                elif self.latest_frame is not None:
+                    frames = [self.latest_frame.copy()]
+                else:
+                    frames = []
+
+            if not frames:
                 time.sleep(0.2)
                 continue
 
             try:
-                caption, stats = captioner.caption_frame(frame)
+                if self.mode == "chunk":
+                    caption, stats = captioner.caption_frames(frames)
+                else:
+                    caption, stats = captioner.caption_frame(frames[-1])
             except Exception:
                 logger.exception("Captioning failed on stream %d", self.stream_id)
                 caption = "[captioning error]"
@@ -120,6 +147,7 @@ class StreamSession:
                 "stream_id": self.stream_id,
                 "caption": caption,
                 "ts": time.time(),
+                "mode": self.mode,
                 "latency_ms": round(stats.latency_ms, 1),
                 "prefill_ms": round(stats.prefill_ms, 1),
                 "decode_ms": round(stats.decode_ms, 1),
@@ -172,7 +200,7 @@ def _allocate_stream_id() -> int:
 # ---------------------------------------------------------------------------
 @app.route("/")
 def index():
-    return render_template("index.html", max_streams=MAX_CONCURRENT_CAPTIONS)
+    return render_template("index.html", max_streams=MAX_CONCURRENT_CAPTIONS, backend=active_backend)
 
 
 # ---- Stream CRUD ----
@@ -186,6 +214,7 @@ def list_streams():
                 "source": s.source_label,
                 "captioning": s.captioning_active,
                 "interval": s.caption_interval,
+                "mode": s.mode,
                 "latency_ms": round(s.latest_latency_ms, 1),
                 "prefill_ms": round(s.latest_prefill_ms, 1),
                 "decode_ms": round(s.latest_decode_ms, 1),
@@ -328,6 +357,25 @@ def set_interval(sid: int):
     return jsonify({"interval": session.caption_interval, "stream_id": sid})
 
 
+@app.route("/caption/mode/<int:sid>", methods=["POST"])
+def set_mode(sid: int):
+    with streams_lock:
+        session = streams.get(sid)
+    if session is None:
+        return jsonify({"error": "stream not found"}), 404
+    data = request.get_json(silent=True) or {}
+    mode = data.get("mode", "")
+    if mode not in ("frame", "chunk"):
+        return jsonify({"error": "mode must be 'frame' or 'chunk'"}), 400
+    session.mode = mode
+    return jsonify({"mode": session.mode, "stream_id": sid})
+
+
+@app.route("/info", methods=["GET"])
+def server_info():
+    return jsonify({"backend": active_backend})
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -339,9 +387,16 @@ def parse_args():
         help="Video source to auto-add on startup (webcam index, file, or URL)",
     )
     p.add_argument(
+        "--backend",
+        default=MODEL_BACKEND,
+        choices=["qwen", "minicpm"],
+        help="Captioning backend: qwen (single-frame) or minicpm (video-chunk)",
+    )
+    p.add_argument(
         "--model",
-        default=MODEL_ID,
-        help="HuggingFace model ID or local path to pre-exported OpenVINO model",
+        default=None,
+        help="HuggingFace model ID or local OpenVINO model directory "
+             "(default: auto-selected per backend)",
     )
     p.add_argument(
         "--device",
@@ -354,13 +409,21 @@ def parse_args():
 
 
 def main():
-    global captioner
+    global captioner, active_backend
 
     args = parse_args()
+    active_backend = args.backend
+
+    # Pick default model per backend if not explicitly given
+    if args.model is None:
+        model_path = MODEL_ID if args.backend == "qwen" else MINICPM_MODEL_ID
+    else:
+        model_path = args.model
 
     # --- Load shared model ---
-    captioner = VideoCaptioner(
-        model_path=args.model,
+    captioner = create_captioner(
+        backend=args.backend,
+        model_path=model_path,
         device=args.device,
     )
 
