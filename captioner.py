@@ -199,7 +199,7 @@ class MiniCPMCaptioner(BaseCaptioner):
             self.processor = AutoProcessor.from_pretrained(
                 MINICPM_MODEL_ID, trust_remote_code=True,
             )
-        self.tokenizer = self.processor.tokenizer
+        self.tokenizer = getattr(self.processor, 'tokenizer', self.processor)
 
         export_needed = _detect_export_needed(model_path)
         logger.info("Loading MiniCPM-V model on %s (export=%s) ...", device, export_needed)
@@ -290,7 +290,7 @@ class InternVLCaptioner(BaseCaptioner):
             self.processor = AutoProcessor.from_pretrained(
                 INTERNVL_MODEL_ID, trust_remote_code=True,
             )
-        self.tokenizer = self.processor.tokenizer
+        self.tokenizer = getattr(self.processor, 'tokenizer', self.processor)
 
         export_needed = _detect_export_needed(model_path)
         logger.info("Loading InternVL3 model on %s (export=%s) ...", device, export_needed)
