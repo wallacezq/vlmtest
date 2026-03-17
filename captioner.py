@@ -175,7 +175,7 @@ class MiniCPMCaptioner(BaseCaptioner):
         self,
         model_path: str = MINICPM_MODEL_ID,
         device: str = OV_DEVICE,
-        max_new_tokens: int = 128,
+        max_new_tokens: int = 32,
         chunk_frames: int = MINICPM_VIDEO_CHUNK_FRAMES,
     ):
         self.max_new_tokens = max_new_tokens
@@ -199,8 +199,8 @@ class MiniCPMCaptioner(BaseCaptioner):
         """Build a text prompt with image placeholders for MiniCPM-V-2.6."""
         image_tags = "".join("(<image>./</image>)" for _ in pil_images)
         question = (
-            "These frames are sampled from a short video clip in chronological order. "
-            "Describe what is happening in the video in one or two concise sentences."
+            "These video frames are in chronological order. "
+            "In 10-15 words, briefly describe the main action."
         )
         return f"<用户>{image_tags}{question}<AI>"
 

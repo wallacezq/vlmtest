@@ -99,6 +99,10 @@
                         '<input id="interval-' + s.stream_id + '" type="number" min="0.5" step="0.5" ' +
                                'value="' + s.interval + '" onchange="setStreamInterval(' + s.stream_id + ')">' +
                     '</label>' +
+                    '<label class="interval-label">Chunk:' +
+                        '<input id="chunksize-' + s.stream_id + '" type="number" min="1" max="32" step="1" ' +
+                               'value="' + (s.chunk_size || 8) + '" onchange="setChunkSize(' + s.stream_id + ')">' +
+                    '</label>' +
                 '</div>' +
                 '<div class="stats-bar">' +
                     '<span class="stat">Latency: <strong id="latency-' + s.stream_id + '">—</strong> ms</span>' +
@@ -187,6 +191,15 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ mode: mode })
+            });
+        }
+
+        function setChunkSize(sid) {
+            const val = parseInt(document.getElementById('chunksize-' + sid).value);
+            fetch('/caption/chunk_size/' + sid, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chunk_size: val })
             });
         }
 

@@ -64,8 +64,9 @@ class StreamSession:
         self.frame_lock = threading.Lock()
 
         # Ring buffer for recent frames (used by MiniCPM chunk mode)
+        self.chunk_size = MINICPM_VIDEO_CHUNK_FRAMES
         self._frame_buffer: collections.deque = collections.deque(
-            maxlen=MINICPM_VIDEO_CHUNK_FRAMES
+            maxlen=max(MINICPM_VIDEO_CHUNK_FRAMES * 2, 32)
         )
 
         # Per-stream captioning mode: "frame" (single image) or "chunk" (video)
@@ -113,7 +114,7 @@ class StreamSession:
         while self.captioning_active:
             with self.frame_lock:
                 if self.mode == "chunk" and len(self._frame_buffer) > 0:
-                    frames = list(self._frame_buffer)
+                    frames = list(self._frame_buffer)[-self.chunk_size:]
                 elif self.latest_frame is not None:
                     frames = [self.latest_frame.copy()]
                 else:
@@ -215,6 +216,7 @@ def list_streams():
                 "captioning": s.captioning_active,
                 "interval": s.caption_interval,
                 "mode": s.mode,
+                "chunk_size": s.chunk_size,
                 "latency_ms": round(s.latest_latency_ms, 1),
                 "prefill_ms": round(s.latest_prefill_ms, 1),
                 "decode_ms": round(s.latest_decode_ms, 1),
@@ -225,6 +227,25 @@ def list_streams():
             for s in streams.values()
         ]
     return jsonify(info)
+
+
+@app.route("/caption/chunk_size/<int:sid>", methods=["POST"])
+def set_chunk_size(sid: int):
+    with streams_lock:
+        session = streams.get(sid)
+    if session is None:
+        return jsonify({"error": "stream not found"}), 404
+    data = request.get_json(silent=True) or {}
+    try:
+        val = int(data.get("chunk_size", session.chunk_size))
+        if val < 1:
+            val = 1
+        if val > 32:
+            val = 32
+        session.chunk_size = val
+    except (TypeError, ValueError):
+        return jsonify({"error": "invalid chunk_size"}), 400
+    return jsonify({"chunk_size": session.chunk_size, "stream_id": sid})
 
 
 @app.route("/streams", methods=["POST"])
