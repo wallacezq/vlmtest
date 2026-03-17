@@ -196,13 +196,12 @@ class MiniCPMCaptioner(BaseCaptioner):
         logger.info("MiniCPM-V model ready on %s.", device)
 
     def _build_prompt(self, pil_images: list[Image.Image]) -> str:
-        """Build a text prompt with <image> placeholders for MiniCPM-V."""
-        image_tags = "".join("<image>" for _ in pil_images)
+        """Build a text prompt with image placeholders for MiniCPM-V-2.6."""
+        image_tags = "".join("(<image>./</image>)" for _ in pil_images)
         question = (
             "These frames are sampled from a short video clip in chronological order. "
             "Describe what is happening in the video in one or two concise sentences."
         )
-        # MiniCPM-V chat format: <用户>{images}{question}<AI>
         return f"<用户>{image_tags}{question}<AI>"
 
     def caption_frame(self, frame_bgr: np.ndarray) -> tuple[str, InferenceStats]:
