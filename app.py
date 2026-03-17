@@ -27,7 +27,7 @@ import numpy as np
 from flask import Flask, Response, render_template, request, jsonify
 
 from config import (
-    MODEL_ID, MINICPM_MODEL_ID, OV_DEVICE,
+    MODEL_ID, MINICPM_MODEL_ID, INTERNVL_MODEL_ID, OV_DEVICE,
     MAX_CONCURRENT_CAPTIONS, MODEL_BACKEND,
     MINICPM_VIDEO_CHUNK_FRAMES,
 )
@@ -71,7 +71,7 @@ class StreamSession:
         self._frame_buffer_lock = threading.Lock()
 
         # Per-stream captioning mode: "frame" (single image) or "chunk" (video)
-        self.mode = "frame" if active_backend == "qwen" else "chunk"
+        self.mode = "frame" if active_backend == "qwen" else "chunk"  # minicpm & internvl default to chunk
 
         self.latest_frame = None
         self.frame_lock = threading.Lock()
@@ -422,8 +422,8 @@ def parse_args():
     p.add_argument(
         "--backend",
         default=MODEL_BACKEND,
-        choices=["qwen", "minicpm"],
-        help="Captioning backend: qwen (single-frame) or minicpm (video-chunk)",
+        choices=["qwen", "minicpm", "internvl"],
+        help="Captioning backend: qwen (single-frame), minicpm or internvl (video-chunk)",
     )
     p.add_argument(
         "--model",
@@ -448,8 +448,9 @@ def main():
     active_backend = args.backend
 
     # Pick default model per backend if not explicitly given
+    _default_models = {"qwen": MODEL_ID, "minicpm": MINICPM_MODEL_ID, "internvl": INTERNVL_MODEL_ID}
     if args.model is None:
-        model_path = MODEL_ID if args.backend == "qwen" else MINICPM_MODEL_ID
+        model_path = _default_models[args.backend]
     else:
         model_path = args.model
 

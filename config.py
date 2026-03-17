@@ -2,7 +2,7 @@
 Central configuration — change model name and paths here only.
 """
 
-# ---- Model backend: "qwen" or "minicpm" ----
+# ---- Model backend: "qwen", "minicpm", or "internvl" ----
 MODEL_BACKEND = "qwen"
 
 # ---- Qwen3-VL settings ----
@@ -13,7 +13,11 @@ OV_MODEL_DIR = "./ov_qwen3_vl_2b"
 MINICPM_MODEL_ID = "openbmb/MiniCPM-V-2_6"
 MINICPM_OV_MODEL_DIR = "./ov_minicpm_v_2_6"
 
-# Number of frames to sample from the video buffer for MiniCPM chunk captioning
+# ---- InternVL3 settings ----
+INTERNVL_MODEL_ID = "OpenGVLab/InternVL3-2B"
+INTERNVL_OV_MODEL_DIR = "./ov_internvl3_2b"
+
+# Number of frames to sample from the video buffer for chunk captioning
 MINICPM_VIDEO_CHUNK_FRAMES = 8
 
 # Default OpenVINO device

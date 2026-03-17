@@ -22,6 +22,7 @@ from transformers import AutoProcessor
 from config import (
     MODEL_ID,
     MINICPM_MODEL_ID,
+    INTERNVL_MODEL_ID,
     OV_DEVICE,
     MINICPM_VIDEO_CHUNK_FRAMES,
 )
@@ -233,6 +234,80 @@ class MiniCPMCaptioner(BaseCaptioner):
 
 
 # ---------------------------------------------------------------------------
+# InternVL3 captioner  (video-chunk)
+# ---------------------------------------------------------------------------
+class InternVLCaptioner(BaseCaptioner):
+    """InternVL3 video-chunk captioner on OpenVINO.
+
+    Sends a chunk of frames as a multi-image prompt using InternVL3's
+    <image> placeholder format.
+    """
+
+    def __init__(
+        self,
+        model_path: str = INTERNVL_MODEL_ID,
+        device: str = OV_DEVICE,
+        max_new_tokens: int = 32,
+        chunk_frames: int = MINICPM_VIDEO_CHUNK_FRAMES,
+    ):
+        self.max_new_tokens = max_new_tokens
+        self.chunk_frames = chunk_frames
+        self._lock = threading.Lock()
+
+        model_path = _resolve_model_path(model_path)
+
+        logger.info("Loading InternVL3 processor from %s ...", model_path)
+        self.processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
+
+        export_needed = _detect_export_needed(model_path)
+        logger.info("Loading InternVL3 model on %s (export=%s) ...", device, export_needed)
+        self.model = OVModelForVisualCausalLM.from_pretrained(
+            model_path, export=export_needed, device=device, compile=True,
+            trust_remote_code=True,
+        )
+        logger.info("InternVL3 model ready on %s.", device)
+
+    def _build_messages(self, n_images: int) -> list[dict]:
+        """Build chat messages with <image> placeholders for InternVL3."""
+        image_placeholders = "".join(f"Image-{i+1}: <image>\n" for i in range(n_images))
+        question = (
+            f"{image_placeholders}"
+            "These video frames are in chronological order. "
+            "In 10-15 words, briefly describe the main action."
+        )
+        return [
+            {"role": "user", "content": [{"type": "text", "text": question}]}
+        ]
+
+    def caption_frame(self, frame_bgr: np.ndarray) -> tuple[str, InferenceStats]:
+        """Caption a single frame (wraps it as a 1-frame chunk)."""
+        return self.caption_frames([frame_bgr])
+
+    def caption_frames(self, frames_bgr: list[np.ndarray]) -> tuple[str, InferenceStats]:
+        """Caption a chunk of BGR frames."""
+        t0 = time.perf_counter()
+
+        indices = np.linspace(0, len(frames_bgr) - 1, min(self.chunk_frames, len(frames_bgr)), dtype=int)
+        pil_images = [Image.fromarray(frames_bgr[i][:, :, ::-1]) for i in indices]
+
+        messages = self._build_messages(len(pil_images))
+        text_prompt = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = self.processor(
+            text=[text_prompt], images=pil_images,
+            padding=True, return_tensors="pt",
+        )
+
+        with self._lock:
+            streamer = _TokenTimingStreamer()
+            t_gen_start = time.perf_counter()
+            generated_ids = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens, streamer=streamer)
+
+        trimmed = [out[len(inp):] for inp, out in zip(inputs.input_ids, generated_ids)]
+        caption = self.processor.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0].strip()
+        return caption, _compute_stats(t0, t_gen_start, streamer)
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 def create_captioner(backend: str = "qwen", **kwargs) -> BaseCaptioner:
@@ -241,5 +316,7 @@ def create_captioner(backend: str = "qwen", **kwargs) -> BaseCaptioner:
         return QwenCaptioner(**kwargs)
     elif backend == "minicpm":
         return MiniCPMCaptioner(**kwargs)
+    elif backend == "internvl":
+        return InternVLCaptioner(**kwargs)
     else:
-        raise ValueError(f"Unknown backend: {backend!r}. Choose 'qwen' or 'minicpm'.")
+        raise ValueError(f"Unknown backend: {backend!r}. Choose 'qwen', 'minicpm', or 'internvl'.")

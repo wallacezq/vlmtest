@@ -1,15 +1,16 @@
 # Live Video Captioning with OpenVINO
 
-Real-time video captioning accelerated with [OpenVINO](https://github.com/openvinotoolkit/openvino) on GPU. Supports two VLM backends:
+Real-time video captioning accelerated with [OpenVINO](https://github.com/openvinotoolkit/openvino) on GPU. Supports three VLM backends:
 
 - **[Qwen3-VL-2B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct)** — single-frame captioning
 - **[MiniCPM-V-2.6](https://huggingface.co/openbmb/MiniCPM-V-2_6)** — video-chunk captioning (multi-frame temporal reasoning)
+- **[InternVL3-2B](https://huggingface.co/OpenGVLab/InternVL3-2B)** — video-chunk captioning (multi-frame temporal reasoning)
 
 Supports up to **3 concurrent video streams** captioned simultaneously through a Flask web UI.
 
 ## Features
 
-- **Dual VLM backends** — Qwen3-VL for per-frame captions, MiniCPM-V for video-chunk captions with temporal context
+- **Triple VLM backends** — Qwen3-VL for per-frame captions, MiniCPM-V and InternVL3 for video-chunk captions with temporal context
 - **OpenVINO GPU acceleration** — models compiled and executed on Intel GPU via OpenVINO runtime
 - **Multi-stream support** — caption up to 3 live video feeds concurrently on a single GPU
 - **Per-stream mode toggle** — switch between Frame and Chunk captioning mode per stream at runtime
@@ -24,7 +25,7 @@ Supports up to **3 concurrent video streams** captioned simultaneously through a
 ```
 vlmtest/
 ├── config.py           # Central configuration (model IDs, device, concurrency)
-├── captioner.py        # VLM backends: QwenCaptioner, MiniCPMCaptioner
+├── captioner.py        # VLM backends: QwenCaptioner, MiniCPMCaptioner, InternVLCaptioner
 ├── app.py              # Flask server with multi-stream management
 ├── export_model.py     # Pre-export models to OpenVINO IR format
 ├── requirements.txt    # Python dependencies
@@ -60,7 +61,13 @@ python app.py
 python app.py --backend minicpm
 ```
 
-### 3. Pre-export models for faster startup (optional)
+### 3. Run with InternVL3 (video-chunk captioning)
+
+```bash
+python app.py --backend internvl
+```
+
+### 4. Pre-export models for faster startup (optional)
 
 ```bash
 # Export Qwen3-VL
@@ -69,12 +76,16 @@ python export_model.py --backend qwen
 # Export MiniCPM-V
 python export_model.py --backend minicpm
 
+# Export InternVL3
+python export_model.py --backend internvl
+
 # Run with pre-exported model
 python app.py --model ./ov_qwen3_vl_2b
 python app.py --backend minicpm --model ./ov_minicpm_v_2_6
+python app.py --backend internvl --model ./ov_internvl3_2b
 ```
 
-### 4. Open the UI
+### 5. Open the UI
 
 Navigate to **http://127.0.0.1:5000** in your browser.
 
@@ -91,8 +102,8 @@ Navigate to **http://127.0.0.1:5000** in your browser.
 ```
 python app.py [OPTIONS]
 
-  --backend TEXT   Captioning backend: qwen (single-frame) or minicpm (video-chunk)
-                   (default: qwen)
+  --backend TEXT   Captioning backend: qwen (single-frame), minicpm or internvl
+                   (video-chunk)  (default: qwen)
   --source TEXT    Auto-add a video source on startup (webcam index, file, or URL)
   --model TEXT     HuggingFace model ID or local OpenVINO model directory
                    (default: auto-selected per backend)
@@ -106,7 +117,7 @@ python app.py [OPTIONS]
 ```
 python export_model.py [OPTIONS]
 
-  --backend TEXT   Model backend to export: qwen or minicpm (default: qwen)
+  --backend TEXT   Model backend to export: qwen, minicpm, or internvl (default: qwen)
   --model TEXT     HuggingFace model ID (default: auto-selected per backend)
   --output TEXT    Output directory (default: auto-selected per backend)
 ```
@@ -119,6 +130,9 @@ python app.py --source 0
 
 # MiniCPM-V with video file
 python app.py --backend minicpm --source /path/to/video.mp4
+
+# InternVL3 with webcam
+python app.py --backend internvl --source 0
 
 # RTSP stream on specific GPU
 python app.py --source rtsp://192.168.1.10/cam --device GPU.1
@@ -133,11 +147,13 @@ All key settings live in [`config.py`](config.py):
 
 | Variable | Default | Description |
 |---|---|---|
-| `MODEL_BACKEND` | `qwen` | Active backend: `qwen` or `minicpm` |
+| `MODEL_BACKEND` | `qwen` | Active backend: `qwen`, `minicpm`, or `internvl` |
 | `MODEL_ID` | `Qwen/Qwen3-VL-2B-Instruct` | Qwen model identifier |
 | `OV_MODEL_DIR` | `./ov_qwen3_vl_2b` | Qwen export directory |
 | `MINICPM_MODEL_ID` | `openbmb/MiniCPM-V-2_6` | MiniCPM-V model identifier |
 | `MINICPM_OV_MODEL_DIR` | `./ov_minicpm_v_2_6` | MiniCPM-V export directory |
+| `INTERNVL_MODEL_ID` | `OpenGVLab/InternVL3-2B` | InternVL3 model identifier |
+| `INTERNVL_OV_MODEL_DIR` | `./ov_internvl3_2b` | InternVL3 export directory |
 | `MINICPM_VIDEO_CHUNK_FRAMES` | `8` | Frames sampled per video chunk |
 | `OV_DEVICE` | `GPU` | OpenVINO inference device |
 | `MAX_CONCURRENT_CAPTIONS` | `3` | Max simultaneous streams on GPU |
@@ -157,14 +173,15 @@ All key settings live in [`config.py`](config.py):
 | `POST` | `/caption/stop/<id>` | Stop captioning |
 | `POST` | `/caption/interval/<id>` | Set interval (`{"interval": 2.0}`) |
 | `POST` | `/caption/mode/<id>` | Set mode (`{"mode": "frame"}` or `{"mode": "chunk"}`) |
+| `POST` | `/caption/chunk_size/<id>` | Set chunk size (`{"chunk_size": 8}`) |
 
 ## Architecture
 
-- **Dual backends** — `QwenCaptioner` (single-frame) and `MiniCPMCaptioner` (video-chunk) share a common `BaseCaptioner` interface, selected via `create_captioner()` factory
+- **Triple backends** — `QwenCaptioner` (single-frame), `MiniCPMCaptioner` (video-chunk), and `InternVLCaptioner` (video-chunk) share a common `BaseCaptioner` interface, selected via `create_captioner()` factory
 - **Single shared model** — one captioner instance loaded on the GPU serves all streams
 - **Serialized GPU inference** — `threading.Lock` ensures only one inference runs at a time, preventing "Infer Request is busy" errors while all streams remain concurrent in frame capture and SSE delivery
 - **Per-stream isolation** — each `StreamSession` has independent video capture, frame ring buffer, captioning loop, mode toggle, and SSE subscribers
-- **Video-chunk mode** — the frame reader fills a ring buffer (`deque(maxlen=8)`); in chunk mode, evenly-sampled frames from the buffer are sent as a multi-image prompt for temporal reasoning
+- **Video-chunk mode** — the frame reader fills a buffer; in chunk mode, evenly-sampled frames spanning the full captioning interval are sent as a multi-image prompt for temporal reasoning
 - **Inference stats** — a `_TokenTimingStreamer` records per-token timestamps to compute prefill time, decode time, and tokens/sec
 - **Background threads** — frame readers run at ~30 fps; captioning loops run at a configurable interval (default 2s)
 

@@ -21,7 +21,11 @@ import logging
 from optimum.intel.openvino import OVModelForVisualCausalLM
 from transformers import AutoProcessor
 
-from config import MODEL_ID, OV_MODEL_DIR, MINICPM_MODEL_ID, MINICPM_OV_MODEL_DIR
+from config import (
+    MODEL_ID, OV_MODEL_DIR,
+    MINICPM_MODEL_ID, MINICPM_OV_MODEL_DIR,
+    INTERNVL_MODEL_ID, INTERNVL_OV_MODEL_DIR,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -29,6 +33,7 @@ logger = logging.getLogger(__name__)
 BACKENDS = {
     "qwen": {"model_id": MODEL_ID, "output": OV_MODEL_DIR, "trust_remote_code": False},
     "minicpm": {"model_id": MINICPM_MODEL_ID, "output": MINICPM_OV_MODEL_DIR, "trust_remote_code": True},
+    "internvl": {"model_id": INTERNVL_MODEL_ID, "output": INTERNVL_OV_MODEL_DIR, "trust_remote_code": True},
 }
 
 
