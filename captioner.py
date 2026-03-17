@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 from optimum.intel.openvino import OVModelForVisualCausalLM
-from transformers import AutoProcessor
+from transformers import AutoProcessor, AutoTokenizer, AutoImageProcessor
 
 from config import (
     MODEL_ID,
@@ -275,22 +275,21 @@ class InternVLCaptioner(BaseCaptioner):
         self._lock = threading.Lock()
 
         model_path = _resolve_model_path(model_path)
+        hub_id = INTERNVL_MODEL_ID  # always available for processor code
 
-        logger.info("Loading InternVL3 processor from %s ...", model_path)
-        self.processor = AutoProcessor.from_pretrained(model_path, trust_remote_code=True)
+        # InternVL3 doesn't ship a combined processor — load tokenizer and
+        # image processor separately.
+        logger.info("Loading InternVL3 tokenizer from %s ...", model_path)
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        except Exception:
+            self.tokenizer = AutoTokenizer.from_pretrained(hub_id, trust_remote_code=True)
 
-        # If the local dir lacks custom processor code, AutoProcessor may
-        # return a plain tokenizer.  Fall back to the HuggingFace hub.
-        if not hasattr(self.processor, 'image_processor'):
-            logger.warning(
-                "Local dir lacks InternVL3 processor code; "
-                "loading processor from %s instead",
-                INTERNVL_MODEL_ID,
-            )
-            self.processor = AutoProcessor.from_pretrained(
-                INTERNVL_MODEL_ID, trust_remote_code=True,
-            )
-        self.tokenizer = getattr(self.processor, 'tokenizer', self.processor)
+        logger.info("Loading InternVL3 image processor ...")
+        try:
+            self.image_processor = AutoImageProcessor.from_pretrained(model_path, trust_remote_code=True)
+        except Exception:
+            self.image_processor = AutoImageProcessor.from_pretrained(hub_id, trust_remote_code=True)
 
         export_needed = _detect_export_needed(model_path)
         logger.info("Loading InternVL3 model on %s (export=%s) ...", device, export_needed)
@@ -324,18 +323,21 @@ class InternVLCaptioner(BaseCaptioner):
         pil_images = [Image.fromarray(frames_bgr[i][:, :, ::-1]) for i in indices]
 
         messages = self._build_messages(len(pil_images))
-        text_prompt = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        inputs = self.processor(
-            text=[text_prompt], images=pil_images,
-            padding=True, return_tensors="pt",
-        )
+        text_prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+
+        # Tokenize text
+        text_inputs = self.tokenizer(text_prompt, padding=True, return_tensors="pt")
+        # Process images into pixel_values
+        image_inputs = self.image_processor(images=pil_images, return_tensors="pt")
+        # Merge into a single dict for generate()
+        inputs = {**text_inputs, **image_inputs}
 
         with self._lock:
             streamer = _TokenTimingStreamer()
             t_gen_start = time.perf_counter()
             generated_ids = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens, streamer=streamer)
 
-        trimmed = [out[len(inp):] for inp, out in zip(inputs.input_ids, generated_ids)]
+        trimmed = [out[len(inp):] for inp, out in zip(text_inputs.input_ids, generated_ids)]
         caption = self.tokenizer.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0].strip()
         return caption, _compute_stats(t0, t_gen_start, streamer)
 
