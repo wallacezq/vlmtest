@@ -21,7 +21,7 @@ from transformers import AutoProcessor, AutoTokenizer, AutoImageProcessor
 
 from config import (
     MODEL_ID,
-    QWEN35_MODEL_ID,
+    QWEN25_MODEL_ID,
     MINICPM_MODEL_ID,
     INTERNVL_MODEL_ID,
     OV_DEVICE,
@@ -166,8 +166,8 @@ class QwenCaptioner(BaseCaptioner):
 # ---------------------------------------------------------------------------
 # Qwen3.5-VL captioner  (video-chunk)
 # ---------------------------------------------------------------------------
-class Qwen35VLCaptioner(BaseCaptioner):
-    """Qwen3.5-VL video-chunk captioner on OpenVINO.
+class Qwen25VLCaptioner(BaseCaptioner):
+    """Qwen2.5-VL video-chunk captioner on OpenVINO.
 
     Uses Qwen's native multi-image/video support via qwen_vl_utils to
     pass multiple frames as a sequence for temporal reasoning.
@@ -175,7 +175,7 @@ class Qwen35VLCaptioner(BaseCaptioner):
 
     def __init__(
         self,
-        model_path: str = QWEN35_MODEL_ID,
+        model_path: str = QWEN25_MODEL_ID,
         device: str = OV_DEVICE,
         max_new_tokens: int = 32,
         chunk_frames: int = MINICPM_VIDEO_CHUNK_FRAMES,
@@ -189,15 +189,15 @@ class Qwen35VLCaptioner(BaseCaptioner):
 
         model_path = _resolve_model_path(model_path)
 
-        logger.info("Loading Qwen3.5-VL processor from %s ...", model_path)
+        logger.info("Loading Qwen2.5-VL processor from %s ...", model_path)
         self.processor = AutoProcessor.from_pretrained(model_path)
 
         export_needed = _detect_export_needed(model_path)
-        logger.info("Loading Qwen3.5-VL model on %s (export=%s) ...", device, export_needed)
+        logger.info("Loading Qwen2.5-VL model on %s (export=%s) ...", device, export_needed)
         self.model = OVModelForVisualCausalLM.from_pretrained(
             model_path, export=export_needed, device=device, compile=True,
         )
-        logger.info("Qwen3.5-VL model ready on %s.", device)
+        logger.info("Qwen2.5-VL model ready on %s.", device)
 
     def caption_frame(self, frame_bgr: np.ndarray) -> tuple[str, InferenceStats]:
         """Caption a single frame (wraps it as a 1-frame chunk)."""
@@ -437,11 +437,11 @@ def create_captioner(backend: str = "qwen", **kwargs) -> BaseCaptioner:
     """Create a captioner instance by backend name."""
     if backend == "qwen":
         return QwenCaptioner(**kwargs)
-    elif backend == "qwen35":
-        return Qwen35VLCaptioner(**kwargs)
+    elif backend == "qwen25":
+        return Qwen25VLCaptioner(**kwargs)
     elif backend == "minicpm":
         return MiniCPMCaptioner(**kwargs)
     elif backend == "internvl":
         return InternVLCaptioner(**kwargs)
     else:
-        raise ValueError(f"Unknown backend: {backend!r}. Choose 'qwen', 'qwen35', 'minicpm', or 'internvl'.")
+        raise ValueError(f"Unknown backend: {backend!r}. Choose 'qwen', 'qwen25', 'minicpm', or 'internvl'.")

@@ -2,16 +2,16 @@
 Central configuration — change model name and paths here only.
 """
 
-# ---- Model backend: "qwen", "qwen35", "minicpm", or "internvl" ----
+# ---- Model backend: "qwen", "qwen25", "minicpm", or "internvl" ----
 MODEL_BACKEND = "qwen"
 
 # ---- Qwen3-VL settings ----
 MODEL_ID = "Qwen/Qwen3-VL-2B-Instruct"
 OV_MODEL_DIR = "./ov_qwen3_vl_2b"
 
-# ---- Qwen3.5-VL settings ----
-QWEN35_MODEL_ID = "Qwen/Qwen3.5-VL-3B-Instruct"
-QWEN35_OV_MODEL_DIR = "./ov_qwen35_vl_3b"
+# ---- Qwen2.5-VL settings ----
+QWEN25_MODEL_ID = "Qwen/Qwen2.5-VL-3B-Instruct"
+QWEN25_OV_MODEL_DIR = "./ov_qwen25_vl_3b"
 
 # ---- MiniCPM-V settings ----
 MINICPM_MODEL_ID = "openbmb/MiniCPM-V-2_6"

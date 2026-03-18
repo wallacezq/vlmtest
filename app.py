@@ -27,7 +27,7 @@ import numpy as np
 from flask import Flask, Response, render_template, request, jsonify
 
 from config import (
-    MODEL_ID, QWEN35_MODEL_ID, MINICPM_MODEL_ID, INTERNVL_MODEL_ID, OV_DEVICE,
+    MODEL_ID, QWEN25_MODEL_ID, MINICPM_MODEL_ID, INTERNVL_MODEL_ID, OV_DEVICE,
     MAX_CONCURRENT_CAPTIONS, MODEL_BACKEND,
     MINICPM_VIDEO_CHUNK_FRAMES,
 )
@@ -422,8 +422,8 @@ def parse_args():
     p.add_argument(
         "--backend",
         default=MODEL_BACKEND,
-        choices=["qwen", "qwen35", "minicpm", "internvl"],
-        help="Captioning backend: qwen (single-frame), qwen35/minicpm/internvl (video-chunk)",
+        choices=["qwen", "qwen25", "minicpm", "internvl"],
+        help="Captioning backend: qwen (single-frame), qwen25/minicpm/internvl (video-chunk)",
     )
     p.add_argument(
         "--model",
@@ -450,7 +450,7 @@ def main():
     # Pick default model per backend if not explicitly given
     _default_models = {
         "qwen": MODEL_ID,
-        "qwen35": QWEN35_MODEL_ID,
+        "qwen25": QWEN25_MODEL_ID,
         "minicpm": MINICPM_MODEL_ID,
         "internvl": INTERNVL_MODEL_ID,
     }

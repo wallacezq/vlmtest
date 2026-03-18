@@ -3,7 +3,7 @@
 Real-time video captioning accelerated with [OpenVINO](https://github.com/openvinotoolkit/openvino) on GPU. Supports four VLM backends:
 
 - **[Qwen3-VL-2B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct)** — single-frame captioning
-- **[Qwen3.5-VL-3B-Instruct](https://huggingface.co/Qwen/Qwen3.5-VL-3B-Instruct)** — video-chunk captioning (multi-frame temporal reasoning)
+- **[Qwen2.5-VL-3B-Instruct](https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct)** — video-chunk captioning (multi-frame temporal reasoning)
 - **[MiniCPM-V-2.6](https://huggingface.co/openbmb/MiniCPM-V-2_6)** — video-chunk captioning (multi-frame temporal reasoning)
 - **[InternVL3-2B](https://huggingface.co/OpenGVLab/InternVL3-2B)** — video-chunk captioning (multi-frame temporal reasoning)
 
@@ -11,7 +11,7 @@ Supports up to **3 concurrent video streams** captioned simultaneously through a
 
 ## Features
 
-- **Four VLM backends** — Qwen3-VL for per-frame captions, Qwen3.5-VL/MiniCPM-V/InternVL3 for video-chunk captions with temporal context
+- **Four VLM backends** — Qwen3-VL for per-frame captions, Qwen2.5-VL/MiniCPM-V/InternVL3 for video-chunk captions with temporal context
 - **OpenVINO GPU acceleration** — models compiled and executed on Intel GPU via OpenVINO runtime
 - **Multi-stream support** — caption up to 3 live video feeds concurrently on a single GPU
 - **Per-stream mode toggle** — switch between Frame and Chunk captioning mode per stream at runtime
@@ -26,7 +26,7 @@ Supports up to **3 concurrent video streams** captioned simultaneously through a
 ```
 vlmtest/
 ├── config.py           # Central configuration (model IDs, device, concurrency)
-├── captioner.py        # VLM backends: QwenCaptioner, Qwen35VLCaptioner, MiniCPMCaptioner, InternVLCaptioner
+├── captioner.py        # VLM backends: QwenCaptioner, Qwen25VLCaptioner, MiniCPMCaptioner, InternVLCaptioner
 ├── app.py              # Flask server with multi-stream management
 ├── export_model.py     # Pre-export models to OpenVINO IR format
 ├── requirements.txt    # Python dependencies
@@ -56,10 +56,10 @@ pip install -r requirements.txt
 python app.py
 ```
 
-### 2. Run with Qwen3.5-VL (video-chunk captioning)
+### 2. Run with Qwen2.5-VL (video-chunk captioning)
 
 ```bash
-python app.py --backend qwen35
+python app.py --backend qwen25
 ```
 
 ### 3. Run with MiniCPM-V (video-chunk captioning)
@@ -80,8 +80,8 @@ python app.py --backend internvl
 # Export Qwen3-VL
 python export_model.py --backend qwen
 
-# Export Qwen3.5-VL
-python export_model.py --backend qwen35
+# Export Qwen2.5-VL
+python export_model.py --backend qwen25
 
 # Export MiniCPM-V
 python export_model.py --backend minicpm
@@ -91,7 +91,7 @@ python export_model.py --backend internvl
 
 # Run with pre-exported model
 python app.py --model ./ov_qwen3_vl_2b
-python app.py --backend qwen35 --model ./ov_qwen35_vl_3b
+python app.py --backend qwen25 --model ./ov_qwen25_vl_3b
 python app.py --backend minicpm --model ./ov_minicpm_v_2_6
 python app.py --backend internvl --model ./ov_internvl3_2b
 ```
@@ -113,7 +113,7 @@ Navigate to **http://127.0.0.1:5000** in your browser.
 ```
 python app.py [OPTIONS]
 
-  --backend TEXT   Captioning backend: qwen (single-frame), qwen35/minicpm/internvl
+  --backend TEXT   Captioning backend: qwen (single-frame), qwen25/minicpm/internvl
                    (video-chunk)  (default: qwen)
   --source TEXT    Auto-add a video source on startup (webcam index, file, or URL)
   --model TEXT     HuggingFace model ID or local OpenVINO model directory
@@ -128,7 +128,7 @@ python app.py [OPTIONS]
 ```
 python export_model.py [OPTIONS]
 
-  --backend TEXT   Model backend to export: qwen, qwen35, minicpm, or internvl (default: qwen)
+  --backend TEXT   Model backend to export: qwen, qwen25, minicpm, or internvl (default: qwen)
   --model TEXT     HuggingFace model ID (default: auto-selected per backend)
   --output TEXT    Output directory (default: auto-selected per backend)
 ```
@@ -142,8 +142,8 @@ python app.py --source 0
 # MiniCPM-V with video file
 python app.py --backend minicpm --source /path/to/video.mp4
 
-# Qwen3.5-VL with webcam
-python app.py --backend qwen35 --source 0
+# Qwen2.5-VL with webcam
+python app.py --backend qwen25 --source 0
 
 # InternVL3 with webcam
 python app.py --backend internvl --source 0
@@ -161,11 +161,11 @@ All key settings live in [`config.py`](config.py):
 
 | Variable | Default | Description |
 |---|---|---|
-| `MODEL_BACKEND` | `qwen` | Active backend: `qwen`, `qwen35`, `minicpm`, or `internvl` |
+| `MODEL_BACKEND` | `qwen` | Active backend: `qwen`, `qwen25`, `minicpm`, or `internvl` |
 | `MODEL_ID` | `Qwen/Qwen3-VL-2B-Instruct` | Qwen model identifier |
 | `OV_MODEL_DIR` | `./ov_qwen3_vl_2b` | Qwen export directory |
-| `QWEN35_MODEL_ID` | `Qwen/Qwen3.5-VL-3B-Instruct` | Qwen3.5-VL model identifier |
-| `QWEN35_OV_MODEL_DIR` | `./ov_qwen35_vl_3b` | Qwen3.5-VL export directory |
+| `QWEN25_MODEL_ID` | `Qwen/Qwen2.5-VL-3B-Instruct` | Qwen2.5-VL model identifier |
+| `QWEN25_OV_MODEL_DIR` | `./ov_qwen25_vl_3b` | Qwen2.5-VL export directory |
 | `MINICPM_MODEL_ID` | `openbmb/MiniCPM-V-2_6` | MiniCPM-V model identifier |
 | `MINICPM_OV_MODEL_DIR` | `./ov_minicpm_v_2_6` | MiniCPM-V export directory |
 | `INTERNVL_MODEL_ID` | `OpenGVLab/InternVL3-2B` | InternVL3 model identifier |
@@ -193,7 +193,7 @@ All key settings live in [`config.py`](config.py):
 
 ## Architecture
 
-- **Four backends** — `QwenCaptioner` (single-frame), `Qwen35VLCaptioner` (video-chunk), `MiniCPMCaptioner` (video-chunk), and `InternVLCaptioner` (video-chunk) share a common `BaseCaptioner` interface, selected via `create_captioner()` factory
+- **Four backends** — `QwenCaptioner` (single-frame), `Qwen25VLCaptioner` (video-chunk, Qwen2.5-VL), `MiniCPMCaptioner` (video-chunk), and `InternVLCaptioner` (video-chunk) share a common `BaseCaptioner` interface, selected via `create_captioner()` factory
 - **Single shared model** — one captioner instance loaded on the GPU serves all streams
 - **Serialized GPU inference** — `threading.Lock` ensures only one inference runs at a time, preventing "Infer Request is busy" errors while all streams remain concurrent in frame capture and SSE delivery
 - **Per-stream isolation** — each `StreamSession` has independent video capture, frame ring buffer, captioning loop, mode toggle, and SSE subscribers
