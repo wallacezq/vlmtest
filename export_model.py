@@ -23,6 +23,7 @@ from transformers import AutoProcessor
 
 from config import (
     MODEL_ID, OV_MODEL_DIR,
+    QWEN35_MODEL_ID, QWEN35_OV_MODEL_DIR,
     MINICPM_MODEL_ID, MINICPM_OV_MODEL_DIR,
     INTERNVL_MODEL_ID, INTERNVL_OV_MODEL_DIR,
 )
@@ -32,6 +33,7 @@ logger = logging.getLogger(__name__)
 
 BACKENDS = {
     "qwen": {"model_id": MODEL_ID, "output": OV_MODEL_DIR, "trust_remote_code": False},
+    "qwen35": {"model_id": QWEN35_MODEL_ID, "output": QWEN35_OV_MODEL_DIR, "trust_remote_code": False},
     "minicpm": {"model_id": MINICPM_MODEL_ID, "output": MINICPM_OV_MODEL_DIR, "trust_remote_code": True},
     "internvl": {"model_id": INTERNVL_MODEL_ID, "output": INTERNVL_OV_MODEL_DIR, "trust_remote_code": True},
 }

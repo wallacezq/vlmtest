@@ -21,6 +21,7 @@ from transformers import AutoProcessor, AutoTokenizer, AutoImageProcessor
 
 from config import (
     MODEL_ID,
+    QWEN35_MODEL_ID,
     MINICPM_MODEL_ID,
     INTERNVL_MODEL_ID,
     OV_DEVICE,
@@ -160,6 +161,81 @@ class QwenCaptioner(BaseCaptioner):
     def caption_frames(self, frames_bgr: list[np.ndarray]) -> tuple[str, InferenceStats]:
         """Qwen falls back to captioning the last frame only."""
         return self.caption_frame(frames_bgr[-1])
+
+
+# ---------------------------------------------------------------------------
+# Qwen3.5-VL captioner  (video-chunk)
+# ---------------------------------------------------------------------------
+class Qwen35VLCaptioner(BaseCaptioner):
+    """Qwen3.5-VL video-chunk captioner on OpenVINO.
+
+    Uses Qwen's native multi-image/video support via qwen_vl_utils to
+    pass multiple frames as a sequence for temporal reasoning.
+    """
+
+    def __init__(
+        self,
+        model_path: str = QWEN35_MODEL_ID,
+        device: str = OV_DEVICE,
+        max_new_tokens: int = 32,
+        chunk_frames: int = MINICPM_VIDEO_CHUNK_FRAMES,
+    ):
+        from qwen_vl_utils import process_vision_info as _pvi
+        self._process_vision_info = _pvi
+
+        self.max_new_tokens = max_new_tokens
+        self.chunk_frames = chunk_frames
+        self._lock = threading.Lock()
+
+        model_path = _resolve_model_path(model_path)
+
+        logger.info("Loading Qwen3.5-VL processor from %s ...", model_path)
+        self.processor = AutoProcessor.from_pretrained(model_path)
+
+        export_needed = _detect_export_needed(model_path)
+        logger.info("Loading Qwen3.5-VL model on %s (export=%s) ...", device, export_needed)
+        self.model = OVModelForVisualCausalLM.from_pretrained(
+            model_path, export=export_needed, device=device, compile=True,
+        )
+        logger.info("Qwen3.5-VL model ready on %s.", device)
+
+    def caption_frame(self, frame_bgr: np.ndarray) -> tuple[str, InferenceStats]:
+        """Caption a single frame (wraps it as a 1-frame chunk)."""
+        return self.caption_frames([frame_bgr])
+
+    def caption_frames(self, frames_bgr: list[np.ndarray]) -> tuple[str, InferenceStats]:
+        """Caption a chunk of BGR frames using Qwen's multi-image support."""
+        t0 = time.perf_counter()
+
+        indices = np.linspace(0, len(frames_bgr) - 1, min(self.chunk_frames, len(frames_bgr)), dtype=int)
+        pil_images = [Image.fromarray(frames_bgr[i][:, :, ::-1]) for i in indices]
+
+        # Build multi-image message for Qwen3.5-VL
+        content = []
+        for img in pil_images:
+            content.append({"type": "image", "image": img})
+        content.append({
+            "type": "text",
+            "text": "These video frames are in chronological order. "
+                    "In 10-15 words, briefly describe the main action.",
+        })
+        messages = [{"role": "user", "content": content}]
+
+        text_prompt = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        image_inputs, video_inputs = self._process_vision_info(messages)
+        inputs = self.processor(
+            text=[text_prompt], images=image_inputs, videos=video_inputs,
+            padding=True, return_tensors="pt",
+        )
+
+        with self._lock:
+            streamer = _TokenTimingStreamer()
+            t_gen_start = time.perf_counter()
+            generated_ids = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens, streamer=streamer)
+
+        trimmed = [out[len(inp):] for inp, out in zip(inputs.input_ids, generated_ids)]
+        caption = self.processor.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0].strip()
+        return caption, _compute_stats(t0, t_gen_start, streamer)
 
 
 # ---------------------------------------------------------------------------
@@ -361,9 +437,11 @@ def create_captioner(backend: str = "qwen", **kwargs) -> BaseCaptioner:
     """Create a captioner instance by backend name."""
     if backend == "qwen":
         return QwenCaptioner(**kwargs)
+    elif backend == "qwen35":
+        return Qwen35VLCaptioner(**kwargs)
     elif backend == "minicpm":
         return MiniCPMCaptioner(**kwargs)
     elif backend == "internvl":
         return InternVLCaptioner(**kwargs)
     else:
-        raise ValueError(f"Unknown backend: {backend!r}. Choose 'qwen', 'minicpm', or 'internvl'.")
+        raise ValueError(f"Unknown backend: {backend!r}. Choose 'qwen', 'qwen35', 'minicpm', or 'internvl'.")
